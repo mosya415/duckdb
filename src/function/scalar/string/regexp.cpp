@@ -4,6 +4,7 @@
 #include "duckdb/common/vector/string_vector.hpp"
 #include "duckdb/common/vector/struct_vector.hpp"
 #include "duckdb/function/scalar/regexp.hpp"
+#include "duckdb/function/scalar/regexp_replace_constant.hpp"
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/vector_operations/binary_executor.hpp"
@@ -285,6 +286,12 @@ static void RegexReplaceFunction(DataChunk &args, ExpressionState &state, Vector
 	const auto &patterns = args.data[1];
 	const auto &replaces = args.data[2];
 
+	if (info.constant_pattern && !info.global_replace && replaces.GetVectorType() == VectorType::CONSTANT_VECTOR &&
+	    !ConstantVector::IsNull(replaces)) {
+		auto &lstate = ExecuteFunctionState::GetFunctionState(state)->Cast<RegexLocalState>();
+		RegexpReplaceConstant::Execute(strings, ConstantVector::GetData<string_t>(replaces)[0], lstate, result);
+		return;
+	}
 	auto &heap = StringVector::GetStringHeap(result);
 	std::string out;
 	const bool constant_rewrite = info.constant_pattern && replaces.GetVectorType() == VectorType::CONSTANT_VECTOR;
