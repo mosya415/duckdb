@@ -1,4 +1,5 @@
 #include "core_functions/scalar/string_functions.hpp"
+#include "core_functions/scalar/bit_parallel_levenshtein.hpp"
 #include "duckdb/common/allocator.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -29,6 +30,12 @@ static idx_t LevenshteinDistance(ExpressionState &state, const string_t &txt, co
 
 	auto txt_str = txt.GetData();
 	auto tgt_str = tgt.GetData();
+	if (tgt_len <= BitParallelLevenshtein::MAX_PATTERN_SIZE) {
+		return BitParallelLevenshtein::Distance(state, tgt_str, tgt_len, txt_str, txt_len);
+	}
+	if (txt_len <= BitParallelLevenshtein::MAX_PATTERN_SIZE) {
+		return BitParallelLevenshtein::Distance(state, txt_str, txt_len, tgt_str, tgt_len);
+	}
 
 	// Create two working vectors
 	const idx_t row_size = tgt_len + 1;
