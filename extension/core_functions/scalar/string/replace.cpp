@@ -13,54 +13,57 @@ namespace duckdb {
 
 static constexpr idx_t REPLACE_CHECK_BYTES = 1 << 20;
 
-static bool ReplaceScalarFunction(ExpressionState &state, const string_t &haystack, const string_t &needle,
-                                  const string_t &thread, const duckdb_re2::LiteralFinder &finder,
-                                  vector<char> &result) {
-	auto input_haystack = haystack.GetData();
+static bool FindNeedles(ExpressionState &state, const string_t &haystack, const string_t &needle,
+                        const duckdb_re2::LiteralFinder &finder, vector<idx_t> &positions) {
+	auto input_haystack = const_uchar_ptr_cast(haystack.GetData());
 	auto size_haystack = haystack.GetSize();
 	auto input_needle = const_uchar_ptr_cast(needle.GetData());
 	auto size_needle = needle.GetSize();
-	const auto find = [&] {
-		return FindStrInStr(const_uchar_ptr_cast(input_haystack), size_haystack, input_needle, size_needle, finder);
-	};
-	auto string_position = find();
-	if (string_position == DConstants::INVALID_INDEX) {
-		return false;
-	}
-	auto input_thread = thread.GetData();
-	auto size_thread = thread.GetSize();
-
-	auto check_size = [&] {
-		if (result.size() > string_t::MAX_STRING_SIZE) {
-			throw OutOfRangeException(
-			    "Cannot create a string of size: '%d' in REPLACE, the maximum supported string size is: '%d'",
-			    result.size(), string_t::MAX_STRING_SIZE);
-		}
-	};
-	result.clear();
+	positions.clear();
+	idx_t pos = 0;
 	idx_t unchecked = 0;
-	for (;; string_position = find()) {
-		if (string_position == DConstants::INVALID_INDEX) {
-			string_position = size_haystack;
-		}
-		result.insert(result.end(), input_haystack, input_haystack + string_position);
-		input_haystack += string_position;
-		size_haystack -= string_position;
-		if (size_haystack == 0) {
+	while (size_haystack - pos >= size_needle) {
+		auto found = FindStrInStr(input_haystack + pos, size_haystack - pos, input_needle, size_needle, finder);
+		if (found == DConstants::INVALID_INDEX) {
 			break;
 		}
-		result.insert(result.end(), input_thread, input_thread + size_thread);
-		input_haystack += size_needle;
-		size_haystack -= size_needle;
-		check_size();
-		unchecked += string_position + size_needle + size_thread;
+		positions.push_back(pos + found);
+		pos += found + size_needle;
+		unchecked += found + size_needle;
 		if (unchecked >= REPLACE_CHECK_BYTES) {
 			state.InterruptCheck();
 			unchecked = 0;
 		}
 	}
-	check_size();
-	return true;
+	return !positions.empty();
+}
+
+static string_t WriteReplaced(const string_t &haystack, const string_t &needle, const string_t &thread,
+                              const vector<idx_t> &positions, Vector &result) {
+	auto haystack_data = haystack.GetData();
+	auto haystack_size = haystack.GetSize();
+	auto needle_size = needle.GetSize();
+	auto thread_data = thread.GetData();
+	auto thread_size = thread.GetSize();
+	auto result_size = haystack_size - positions.size() * needle_size + positions.size() * thread_size;
+	if (result_size > string_t::MAX_STRING_SIZE) {
+		throw OutOfRangeException(
+		    "Cannot create a string of size: '%d' in REPLACE, the maximum supported string size is: '%d'", result_size,
+		    string_t::MAX_STRING_SIZE);
+	}
+	auto target = StringVector::EmptyString(result, result_size);
+	auto out = target.GetDataWriteable();
+	idx_t copied = 0;
+	for (auto position : positions) {
+		memcpy(out, haystack_data + copied, position - copied);
+		out += position - copied;
+		memcpy(out, thread_data, thread_size);
+		out += thread_size;
+		copied = position + needle_size;
+	}
+	memcpy(out, haystack_data + copied, haystack_size - copied);
+	target.Finalize();
+	return target;
 }
 
 static void ReplaceFunction(DataChunk &args, ExpressionState &state, Vector &result) {
@@ -75,8 +78,7 @@ static void ReplaceFunction(DataChunk &args, ExpressionState &state, Vector &res
 		const auto &needle = ConstantVector::GetData<string_t>(needle_vector)[0];
 		constant_finder = duckdb_re2::LiteralFinder(absl::string_view(needle.GetData(), needle.GetSize()));
 	}
-	vector<char> buffer;
-	auto &heap = StringVector::GetStringHeap(result);
+	vector<idx_t> positions;
 	TernaryExecutor::Execute<string_t, string_t, string_t, string_t>(
 	    haystack_vector, needle_vector, thread_vector, result,
 	    [&](string_t input_string, string_t needle_string, string_t thread_string) {
@@ -87,10 +89,10 @@ static void ReplaceFunction(DataChunk &args, ExpressionState &state, Vector &res
 		    const auto finder =
 		        constant_needle ? constant_finder
 		                        : duckdb_re2::LiteralFinder(absl::string_view(needle_string.GetData(), size_needle));
-		    if (!ReplaceScalarFunction(state, input_string, needle_string, thread_string, finder, buffer)) {
+		    if (!FindNeedles(state, input_string, needle_string, finder, positions)) {
 			    return input_string;
 		    }
-		    return heap.AddString(buffer.data(), buffer.size());
+		    return WriteReplaced(input_string, needle_string, thread_string, positions, result);
 	    });
 	StringVector::AddHeapReference(result, haystack_vector);
 }
