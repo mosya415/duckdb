@@ -1,5 +1,6 @@
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/execution/constant_in_list.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/common/error_data.hpp"
 #include "duckdb/common/string_map_set.hpp"
@@ -161,6 +162,9 @@ void ExpressionExecutor::Execute(const BoundOperatorExpression &expr, Expression
 		auto &left = chunk.data[0];
 		// eval left side
 		Execute(*children[0], state->child_states[0].get(), sel, count, left);
+		if (ConstantInList::TryExecute(expr, left, count, result)) {
+			return;
+		}
 
 		if (in_state.use_set && left.GetVectorType() != VectorType::CONSTANT_VECTOR) {
 			Vector left_keys(LogicalType::BLOB, count);
