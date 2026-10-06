@@ -1,4 +1,5 @@
 #include "core_functions/scalar/string_functions.hpp"
+#include "core_functions/scalar/simple_printf.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/common/limits.hpp"
 #include "duckdb/common/string_format.hpp"
@@ -132,6 +133,9 @@ struct PrintfArgumentColumn {
 
 template <class FORMAT_FUN>
 static void PrintfFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	if (SimplePrintf::TryExecute(args, result, std::is_same<FORMAT_FUN, FMTPrintf>::value)) {
+		return;
+	}
 	idx_t count = args.size();
 
 	auto format_data = args.data[0].Values<string_t>();
