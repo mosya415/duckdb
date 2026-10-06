@@ -1,4 +1,5 @@
 #include "core_functions/scalar/string_functions.hpp"
+#include "core_functions/scalar/ascii_translate.hpp"
 
 #include "duckdb/common/array.hpp"
 #include "duckdb/common/exception.hpp"
@@ -118,6 +119,9 @@ static void TranslateFunction(DataChunk &args, ExpressionState &state, Vector &r
 	const auto &needle_vector = args.data[1];
 	const auto &thread_vector = args.data[2];
 
+	if (AsciiTranslate::TryExecute(args, result)) {
+		return;
+	}
 	vector<char> buffer;
 	auto &heap = StringVector::GetStringHeap(result);
 	if (needle_vector.GetVectorType() == VectorType::CONSTANT_VECTOR &&

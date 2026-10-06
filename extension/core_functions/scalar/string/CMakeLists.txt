@@ -19,6 +19,7 @@ add_library_unity(
   pad.cpp
   fast_reverse.cpp
   fast_trim.cpp
+  ascii_translate.cpp
   trim.cpp
   format_bytes.cpp
   parse_formatted_bytes.cpp
