@@ -13,6 +13,17 @@ namespace duckdb {
 
 void FillRepeated(ExpressionState &state, char *data, idx_t unit_size, idx_t size) {
 	static constexpr idx_t CHECK_BYTES = 1 << 20;
+	if (unit_size == 1) {
+		for (idx_t filled = 1; filled < size;) {
+			auto chunk = MinValue(CHECK_BYTES, size - filled);
+			memset(data + filled, data[0], chunk);
+			filled += chunk;
+			if (filled < size) {
+				state.InterruptCheck();
+			}
+		}
+		return;
+	}
 	idx_t filled = MinValue(unit_size, size);
 	idx_t period = filled;
 	while (filled < size) {

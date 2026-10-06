@@ -10,16 +10,30 @@
 
 namespace duckdb {
 
+static idx_t CharacterOffset(const char *data, idx_t size, idx_t chars) {
+	auto ascii = FirstNonAscii(data, MinValue(size, chars));
+	if (ascii == chars) {
+		return chars;
+	}
+	idx_t seen = ascii;
+	for (idx_t i = ascii; i < size; i++) {
+		if (IsCharacter(data[i])) {
+			if (seen == chars) {
+				return i;
+			}
+			seen++;
+		}
+	}
+	return size;
+}
+
 static pair<idx_t, idx_t> PadCountChars(const idx_t len, const char *data, const idx_t size) {
 	//  Count how much of str will fit in the output
-	idx_t nbytes = FirstNonAscii(data, MinValue(len, size));
-	idx_t nchars = nbytes;
-	for (; nchars < len && nbytes < size; ++nchars) {
-		int32_t codepoint;
-		nbytes += DecodeCodepoint(data + nbytes, size - nbytes, codepoint);
+	if (size <= len) {
+		return pair<idx_t, idx_t>(size, Utf8CharacterCount(data, size));
 	}
-
-	return pair<idx_t, idx_t>(nbytes, nchars);
+	auto nbytes = CharacterOffset(data, size, len);
+	return pair<idx_t, idx_t>(nbytes, nbytes == size ? Utf8CharacterCount(data, size) : len);
 }
 
 static idx_t PaddingByteCount(const idx_t len, const string_t &pad) {
