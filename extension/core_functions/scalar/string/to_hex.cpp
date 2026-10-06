@@ -1,4 +1,6 @@
+#include "duckdb/common/bit_utils.hpp"
 #include "duckdb/common/vector_operations/unary_executor.hpp"
+#include "core_functions/scalar/hex_digits.hpp"
 #include "core_functions/scalar/string_functions.hpp"
 
 namespace duckdb {
@@ -7,14 +9,11 @@ template <class T>
 static void LowercaseHexFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	UnaryExecutor::Execute<T, string_t>(args.data[0], result, args.size(), [&](T value) {
 		using UNSIGNED = typename std::make_unsigned<T>::type;
-		auto remaining = static_cast<UNSIGNED>(value);
-		char buffer[sizeof(UNSIGNED) * 2];
-		idx_t position = sizeof(buffer);
-		do {
-			buffer[--position] = "0123456789abcdef"[remaining & 0xF];
-			remaining >>= 4;
-		} while (remaining != 0);
-		return StringVector::AddString(result, buffer + position, sizeof(buffer) - position);
+		const auto bits = static_cast<uint64_t>(static_cast<UNSIGNED>(value));
+		char buffer[16];
+		WriteHexDigits16<false>(bits, buffer);
+		const idx_t digits = MaxValue<idx_t>(16 - CountZeros<uint64_t>::Leading(bits) / 4, 1);
+		return StringVector::AddString(result, buffer + 16 - digits, digits);
 	});
 }
 
