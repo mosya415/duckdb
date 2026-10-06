@@ -1,5 +1,7 @@
 #pragma once
 
+#include <bit>
+
 #include "duckdb/common/swar.hpp"
 #include "duckdb/common/typedefs.hpp"
 #include "duckdb/function/scalar_function.hpp"
@@ -40,6 +42,29 @@ inline idx_t FirstNonAscii(const char *input, idx_t n) {
 //! Decodes one codepoint and returns its length - throws an InternalException on invalid UTF-8
 idx_t DecodeCodepoint(const char *input, idx_t size, int32_t &codepoint);
 void FillRepeated(ExpressionState &state, char *data, idx_t unit_size, idx_t size);
+inline uint64_t Utf8ContinuationBytes(uint64_t word) {
+	return word & ~(word << 1) & SwarWord::MSB;
+}
+
+inline idx_t Utf8CharacterCount(const char *input, idx_t n) {
+	idx_t continuation = 0;
+	idx_t i = 0;
+	for (; i + SwarWord::SIZE <= n; i += SwarWord::SIZE) {
+		continuation += std::popcount(Utf8ContinuationBytes(Load<uint64_t>(const_data_ptr_cast(input + i))));
+	}
+	if (i == n) {
+		return n - continuation;
+	}
+	if (n >= SwarWord::SIZE) {
+		const auto unseen = ~uint64_t(0) << ((SwarWord::SIZE - (n - i)) * 8);
+		const auto last = Load<uint64_t>(const_data_ptr_cast(input + n - SwarWord::SIZE));
+		return n - continuation - std::popcount(Utf8ContinuationBytes(last) & unseen);
+	}
+	for (; i < n; i++) {
+		continuation += (static_cast<uint8_t>(input[i]) & 0xC0) == 0x80;
+	}
+	return n - continuation;
+}
 idx_t LowerLength(const char *input_data, idx_t input_length);
 idx_t LowerCase(const char *input_data, idx_t input_length, char *result_data, idx_t result_capacity);
 idx_t FindStrInStr(const string_t &haystack_s, const string_t &needle_s);
@@ -65,18 +90,7 @@ static inline bool IsCharacter(char c) {
 
 template <class TA, class TR>
 static inline TR Length(TA input) {
-	auto input_data = input.GetData();
-	auto input_length = input.GetSize();
-	// ASCII bytes are one code point each, so only the remainder needs to be counted
-	const auto ascii_end = FirstNonAscii(input_data, input_length);
-	if (ascii_end == input_length) {
-		return UnsafeNumericCast<TR>(input_length);
-	}
-	TR length = UnsafeNumericCast<TR>(ascii_end);
-	for (idx_t i = ascii_end; i < input_length; i++) {
-		length += IsCharacter(input_data[i]);
-	}
-	return length;
+	return UnsafeNumericCast<TR>(Utf8CharacterCount(input.GetData(), input.GetSize()));
 }
 
 template <class TA, class TR>
