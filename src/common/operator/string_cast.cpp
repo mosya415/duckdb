@@ -6,6 +6,7 @@
 #include "duckdb/common/types/interval.hpp"
 #include "duckdb/common/types/time.hpp"
 #include "duckdb/common/types/timestamp.hpp"
+#include "fmt/compile.h"
 
 namespace duckdb {
 
@@ -63,7 +64,7 @@ duckdb::string_t StringCast::Operation(hugeint_t input, StringHeap &heap) {
 template <class T>
 static string_t FormatFloatingPoint(T input, StringHeap &heap) {
 	char buffer[64];
-	const auto result = duckdb_fmt::format_to_n(buffer, sizeof(buffer), "{}", input);
+	const auto result = duckdb_fmt::format_to_n(buffer, sizeof(buffer), FMT_COMPILE("{}"), input);
 	D_ASSERT(result.size <= sizeof(buffer));
 	return heap.AddString(buffer, result.size);
 }
