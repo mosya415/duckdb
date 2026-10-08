@@ -19,6 +19,7 @@
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 #include "duckdb/storage/data_table.hpp"
 #include "duckdb/storage/table/data_table_info.hpp"
+#include "duckdb/storage/table/table_log_storage.hpp"
 #include "duckdb/storage/table_io_manager.hpp"
 
 namespace duckdb {
@@ -127,8 +128,14 @@ TableStorageLoad::TableStorageLoad(DuckCatalog &catalog_p, ClientContext &contex
     : catalog(catalog_p), load_context(context_p) {
 	catalog.ScanSchemas([&](SchemaCatalogEntry &schema) {
 		schema.Scan(CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
-			if (entry.type == CatalogType::TABLE_ENTRY && entry.Cast<TableCatalogEntry>().IsDuckTable()) {
+			if (entry.type != CatalogType::TABLE_ENTRY) {
+				return;
+			}
+			auto &table = entry.Cast<TableCatalogEntry>();
+			if (table.IsDuckTable()) {
 				tables.emplace(entry.oid, entry.Cast<DuckTableEntry>());
+			} else if (auto log_storage = table.GetLogStorage()) {
+				log_tables.emplace(entry.oid, *log_storage);
 			}
 		});
 	});
@@ -143,6 +150,14 @@ optional_ptr<DuckTableEntry> TableStorageLoad::Find(idx_t table_oid) {
 		return nullptr;
 	}
 	return entry->second->Cast<DuckTableEntry>();
+}
+
+optional_ptr<TableLogStorage> TableStorageLoad::FindLogStorage(idx_t table_oid) {
+	auto entry = log_tables.find(table_oid);
+	if (entry == log_tables.end()) {
+		return nullptr;
+	}
+	return entry->second.get();
 }
 
 SchemaCatalogEntry &TableStorageLoad::GetSchema(CatalogTransaction transaction, idx_t table_oid) {

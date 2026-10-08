@@ -815,5 +815,16 @@
         "type": "vector<idx_t>"
       }
     ]
+  },
+  {
+    "class": "WALAdoptSegments",
+    "pointer_type": "none",
+    "members": [
+      {
+        "id": 101,
+        "name": "segments",
+        "type": "vector<string>"
+      }
+    ]
   }
 ]

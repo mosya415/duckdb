@@ -72,6 +72,8 @@ enum class WALType : uint8_t {
 	DROP_REPLICATION_ORIGIN = 215,
 	CREATE_JOB = 216,
 	DROP_JOB = 217,
+	TRUNCATE_TABLE = 218,
+	ADOPT_SEGMENTS = 219,
 	// -----------------------------
 	// Flush
 	// -----------------------------

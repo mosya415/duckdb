@@ -26,6 +26,7 @@ class DuckTransactionManager;
 class StorageLockKey;
 class StorageCommitState;
 class ReplicationLsnEntry;
+class TransactionLogWriter;
 struct UndoBufferProperties;
 
 struct CommitInfo {
@@ -54,6 +55,7 @@ public:
 	//! The committed catalog version just before this commit published
 	idx_t catalog_version_before_commit = 0;
 	shared_ptr<WriteAheadLog> decision_log;
+	vector<shared_ptr<TransactionLogWriter>> log_writers;
 
 	atomic<idx_t> catalog_version;
 

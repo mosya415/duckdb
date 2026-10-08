@@ -118,23 +118,45 @@ bool WriteAheadLog::Initialized() const {
 //===--------------------------------------------------------------------===//
 class ChecksumWriter : public WriteStream {
 public:
-	explicit ChecksumWriter(WriteAheadLog &wal) : wal(wal), memory_stream(Allocator::Get(wal.GetDatabase())) {
+	explicit ChecksumWriter(WriteAheadLog &wal)
+	    : database(wal.GetDatabase()), wal(&wal), memory_stream(Allocator::Get(database)) {
+	}
+	ChecksumWriter(AttachedDatabase &database, MemoryStream &target)
+	    : database(database), stream(&target), memory_stream(Allocator::Get(database)) {
+		if (!database.GetCatalog().Cast<DuckCatalog>().GetIsEncrypted()) {
+			direct = &target;
+			header_offset = target.GetPosition();
+			target.Write<uint64_t>(0);
+			target.Write<uint64_t>(0);
+		}
 	}
 
 	void WriteData(const_data_ptr_t buffer, idx_t write_size) override {
+		if (direct) {
+			direct->WriteData(buffer, write_size);
+			return;
+		}
 		// buffer data into the memory stream
 		memory_stream.WriteData(buffer, write_size);
 	}
 
 	void Flush() {
+		if (direct) {
+			auto header = direct->GetData() + header_offset;
+			auto body = header + 2 * sizeof(uint64_t);
+			uint64_t size = direct->GetPosition() - header_offset - 2 * sizeof(uint64_t);
+			Store<uint64_t>(size, header);
+			Store<uint64_t>(Checksum(body, size), header + sizeof(uint64_t));
+			return;
+		}
 		if (!stream) {
-			stream = wal.Initialize();
+			stream = wal->Initialize();
 		}
 
 		// if the config.encrypt WAL is true
 		// and if the attached database is encrypted
 		// then encrypt WAL before flushing
-		auto &catalog = wal.GetDatabase().GetCatalog().Cast<DuckCatalog>();
+		auto &catalog = database.GetCatalog().Cast<DuckCatalog>();
 
 		if (catalog.GetIsEncrypted()) {
 			return FlushEncrypted();
@@ -154,7 +176,7 @@ public:
 	}
 
 	void FlushEncrypted() {
-		auto &catalog = wal.GetDatabase().GetCatalog().Cast<DuckCatalog>();
+		auto &catalog = database.GetCatalog().Cast<DuckCatalog>();
 		auto encryption_key_id = catalog.GetEncryptionKeyId();
 
 		auto data = memory_stream.GetData();
@@ -163,7 +185,7 @@ public:
 		// compute the checksum over the entry
 		auto checksum = Checksum(data, size);
 
-		auto &db = wal.GetDatabase();
+		auto &db = database;
 		auto &keys = EncryptionKeyManager::Get(db.GetDatabase());
 		auto metadata = make_uniq<EncryptionStateMetadata>(db.GetStorageManager().GetCipher(),
 		                                                   MainHeader::DEFAULT_ENCRYPTION_KEY_LENGTH,
@@ -209,14 +231,17 @@ public:
 		memory_stream.Rewind();
 	}
 
-	WriteAheadLog &GetWAL() {
+	optional_ptr<WriteAheadLog> GetWAL() {
 		return wal;
 	}
 
 private:
-	WriteAheadLog &wal;
+	AttachedDatabase &database;
+	optional_ptr<WriteAheadLog> wal;
 	optional_ptr<WriteStream> stream;
 	MemoryStream memory_stream;
+	optional_ptr<MemoryStream> direct;
+	idx_t header_offset = 0;
 };
 
 class WriteAheadLogSerializer {
@@ -232,10 +257,18 @@ public:
 		serializer.WriteProperty(100, "wal_type", wal_type);
 	}
 
+	WriteAheadLogSerializer(AttachedDatabase &database, MemoryStream &stream, WALType wal_type)
+	    : checksum_writer(database, stream), serializer(checksum_writer, SerializationOptions(database)) {
+		serializer.Begin();
+		serializer.WriteProperty(100, "wal_type", wal_type);
+	}
+
 	void End() {
 		serializer.End();
 		checksum_writer.Flush();
-		checksum_writer.GetWAL().IncrementWALEntriesCount();
+		if (auto wal = checksum_writer.GetWAL()) {
+			wal->IncrementWALEntriesCount();
+		}
 	}
 
 	template <class T>
@@ -659,6 +692,58 @@ void WriteAheadLog::WriteDelete(DataChunk &chunk) {
 	WriteAheadLogSerializer serializer(*this, WALType::DELETE_TUPLE);
 	serializer.WriteProperty(101, "chunk", chunk);
 	serializer.End();
+}
+
+void WriteAheadLog::WriteEntries(const WALEntryBuffer &entries) {
+	if (entries.entry_count == 0) {
+		return;
+	}
+	auto &stream = Initialize();
+	WriteHeader();
+	stream.WriteData(entries.stream.GetData(), entries.stream.GetPosition());
+	for (idx_t i = 0; i < entries.entry_count; i++) {
+		IncrementWALEntriesCount();
+	}
+}
+
+WALEntryBuffer::WALEntryBuffer(AttachedDatabase &database, idx_t capacity)
+    : database(database), stream(Allocator::Get(database),
+                                 NextPowerOfTwo(MaxValue<idx_t>(capacity, MemoryStream::DEFAULT_INITIAL_CAPACITY))) {
+}
+
+void WALEntryBuffer::WriteInsert(DataChunk &chunk, idx_t row_start) {
+	D_ASSERT(chunk.size() > 0);
+	chunk.Verify(database.GetDatabase());
+
+	WriteAheadLogSerializer serializer(database, stream, WALType::INSERT_TUPLE);
+	serializer.WriteProperty(101, "chunk", chunk);
+	serializer.WriteProperty(16486, "row_start", row_start);
+	serializer.End();
+	entry_count++;
+}
+
+void WALEntryBuffer::WriteDelete(DataChunk &chunk) {
+	D_ASSERT(chunk.size() > 0);
+	D_ASSERT(chunk.ColumnCount() == 1 && chunk.data[0].GetType() == LogicalType::ROW_TYPE);
+	chunk.Verify(database.GetDatabase());
+
+	WriteAheadLogSerializer serializer(database, stream, WALType::DELETE_TUPLE);
+	serializer.WriteProperty(101, "chunk", chunk);
+	serializer.End();
+	entry_count++;
+}
+
+void WALEntryBuffer::WriteTruncateTable() {
+	WriteAheadLogSerializer serializer(database, stream, WALType::TRUNCATE_TABLE);
+	serializer.End();
+	entry_count++;
+}
+
+void WALEntryBuffer::WriteAdoptSegments(const vector<string> &segments) {
+	WriteAheadLogSerializer serializer(database, stream, WALType::ADOPT_SEGMENTS);
+	serializer.WriteEntry(WALAdoptSegments {segments});
+	serializer.End();
+	entry_count++;
 }
 
 void WriteAheadLog::WriteUpdate(DataChunk &chunk, const vector<column_t> &column_indexes) {

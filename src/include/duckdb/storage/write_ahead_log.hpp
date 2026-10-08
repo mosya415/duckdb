@@ -15,6 +15,7 @@
 #include "duckdb/catalog/catalog_entry/table_macro_catalog_entry.hpp"
 #include "duckdb/common/enums/wal_type.hpp"
 #include "duckdb/common/serializer/buffered_file_writer.hpp"
+#include "duckdb/common/serializer/memory_stream.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/storage/block.hpp"
 
@@ -40,6 +41,23 @@ class WriteAheadLogDeserializer;
 struct PersistentCollectionData;
 
 enum class WALInitState { NO_WAL, UNINITIALIZED, UNINITIALIZED_REQUIRES_TRUNCATE, INITIALIZED };
+
+class WALEntryBuffer {
+public:
+	WALEntryBuffer(AttachedDatabase &database, idx_t capacity);
+
+	void WriteInsert(DataChunk &chunk, idx_t row_start);
+	void WriteDelete(DataChunk &chunk);
+	void WriteTruncateTable();
+	void WriteAdoptSegments(const vector<string> &segments);
+
+private:
+	friend class WriteAheadLog;
+
+	AttachedDatabase &database;
+	MemoryStream stream;
+	idx_t entry_count = 0;
+};
 
 //! The WriteAheadLog (WAL) is a log that is used to provide durability. Prior
 //! to committing a transaction it writes the changes the transaction made to
@@ -138,6 +156,7 @@ public:
 	void WriteInsert(DataChunk &chunk);
 	void WriteRowGroupData(const PersistentCollectionData &data);
 	void WriteDelete(DataChunk &chunk);
+	void WriteEntries(const WALEntryBuffer &entries);
 	//! Write a single (sub-) column update to the WAL. Chunk must be a pair of (COL, ROW_ID).
 	//! The column_path vector is a *path* towards a column within the table
 	//! i.e. if we have a table with a single column S STRUCT(A INT, B INT)
