@@ -631,6 +631,7 @@ ErrorData DuckTransactionManager::FinishPreparedTransaction(ClientContext &conte
 	}
 	auto undo_properties = transaction.GetUndoProperties();
 	unique_ptr<DuckTransaction::PreparedCommit> prepared;
+	vector<shared_ptr<ClientContextState>> states;
 	{
 		unique_lock<mutex> t_lock(transaction_lock);
 		if (transaction.prepared->applied) {
@@ -645,12 +646,9 @@ ErrorData DuckTransactionManager::FinishPreparedTransaction(ClientContext &conte
 						wal_end_offset = storage_manager.GetWALSize();
 					}
 				}
-				const auto states = context.registered_state->States();
+				states = context.registered_state->States();
 				for (auto &state : states) {
 					state->TransactionPreCheckpoint(db, context, wal_generation, wal_end_offset);
-				}
-				for (auto &state : states) {
-					state->TransactionDurable(db, context);
 				}
 			}
 		}
@@ -666,6 +664,9 @@ ErrorData DuckTransactionManager::FinishPreparedTransaction(ClientContext &conte
 		QueueCleanup(RemoveTransaction(transaction, store_transaction, CreateCleanupInfo()));
 	}
 	prepared.reset();
+	for (auto &state : states) {
+		state->TransactionDurable(db, context);
+	}
 	CleanupTransactions();
 	DatabaseManager::Get(db.GetDatabase()).DrainPendingTeardowns();
 	return ErrorData();
@@ -833,11 +834,6 @@ ErrorData DuckTransactionManager::CommitTransaction(ClientContext &context, Tran
 				sync_window.fetch_add(1, std::memory_order_relaxed);
 			}
 		}
-		if (!commit_wal) {
-			for (auto &state : states) {
-				state->TransactionDurable(db, context);
-			}
-		}
 
 		// check if catalog changes were made
 		if (transaction.catalog_version >= TRANSACTION_ID_START) {
@@ -868,6 +864,11 @@ ErrorData DuckTransactionManager::CommitTransaction(ClientContext &context, Tran
 	// this prevents any concurrent transactions from happening during this time
 	if (!skip_wal_write_due_to_checkpoint && held_commit_lock.owns_lock()) {
 		held_commit_lock.unlock();
+	}
+	if (!commit_wal) {
+		for (auto &state : states) {
+			state->TransactionDurable(db, context);
+		}
 	}
 
 	if (commit_wal) {
