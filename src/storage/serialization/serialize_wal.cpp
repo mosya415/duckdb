@@ -9,6 +9,16 @@
 
 namespace duckdb {
 
+void WALAdoptSegments::Serialize(Serializer &serializer) const {
+	serializer.WritePropertyWithDefault<vector<string>>(101, "segments", segments);
+}
+
+WALAdoptSegments WALAdoptSegments::Deserialize(Deserializer &deserializer) {
+	WALAdoptSegments result;
+	deserializer.ReadPropertyWithDefault<vector<string>>(101, "segments", result.segments);
+	return result;
+}
+
 void WALCheckpoint::Serialize(Serializer &serializer) const {
 	serializer.WriteProperty<MetaBlockPointer>(101, "meta_block", meta_block);
 }
