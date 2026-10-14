@@ -91,10 +91,15 @@ public:
 	idx_t GetReplayCommitOffset() const {
 		return replay_commit_offset;
 	}
-	void SetReplayCommitOffset(idx_t offset) {
+	idx_t GetReplayGeneration() const {
+		return replay_generation;
+	}
+	void SetReplayPosition(idx_t generation, idx_t offset) {
+		replay_generation = generation;
 		replay_commit_offset = offset;
 	}
-	void ResetReplayCommitOffset() {
+	void ResetReplayPosition() {
+		replay_generation = 0;
 		replay_commit_offset = 0;
 	}
 
@@ -191,6 +196,7 @@ private:
 	atomic<idx_t> next_checkpoint_id = {0};
 	//! Byte offset of the WAL entry currently being replayed (0 when not replaying)
 	atomic<idx_t> replay_commit_offset {0};
+	atomic<idx_t> replay_generation {0};
 	//! Set of currently running transactions
 	vector<unique_ptr<DuckTransaction>> active_transactions;
 	//! Set of recently committed transactions

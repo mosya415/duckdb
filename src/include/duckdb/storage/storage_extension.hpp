@@ -50,6 +50,10 @@ public:
 	virtual void OnCheckpointEnd(AttachedDatabase &db, CheckpointOptions checkpoint_options) {
 	}
 
+	virtual optional_idx NeededWALGeneration(AttachedDatabase &db) {
+		return optional_idx();
+	}
+
 	static optional_ptr<StorageExtension> Find(const DBConfig &config, const string &extension_name);
 	static void Register(DBConfig &config, const string &extension_name, shared_ptr<StorageExtension> extension);
 };

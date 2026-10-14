@@ -113,6 +113,12 @@ public:
 	string GetCheckpointWALPath();
 	//! The path to the WAL that is used while recovering from a crash involving the checkpoint WAL
 	string GetRecoveryWALPath();
+	string GetRetainedWALPath(idx_t generation);
+	void SetRetainedWALStart(optional_idx generation);
+	idx_t GetOldestWALGeneration() const {
+		return oldest_wal_generation;
+	}
+	void ReleaseRetainedWAL(unique_lock<mutex> &commit_lock);
 	bool InMemory() const;
 
 	virtual bool AutomaticCheckpoint(idx_t estimated_wal_bytes) = 0;
@@ -169,6 +175,10 @@ protected:
 	virtual void LoadDatabase(QueryContext context) = 0;
 	virtual void LoadStorage(QueryContext context) = 0;
 
+private:
+	optional_idx NeededWALGeneration();
+	void RemoveRetainedWAL(idx_t end, idx_t chain_end);
+
 protected:
 	bool defer_load = false;
 	bool deferred_storage = false;
@@ -181,6 +191,8 @@ protected:
 	string wal_path;
 	//! The WriteAheadLog of the storage manager
 	unique_ptr<WriteAheadLog> wal;
+	optional_idx retained_wal_start;
+	atomic<idx_t> oldest_wal_generation {0};
 	//! Held by every commit with changes from its append to its commit or revert, and by a checkpoint at start and end
 	mutex commit_lock;
 	//! Whether or not the database is opened in read-only mode

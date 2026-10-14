@@ -279,7 +279,7 @@ bool StorageManager::WALStartCheckpoint(MetaBlockPointer meta_block, CheckpointO
 		return false;
 	}
 	// start the checkpoint process around the WAL
-	if (GetWALSize() == 0) {
+	if (GetWALSize() == 0 && !retained_wal_start.IsValid()) {
 		// no WAL - we don't need to do anything here
 		return false;
 	}
@@ -316,6 +316,15 @@ void StorageManager::WALFinishCheckpoint(unique_lock<mutex> &) {
 	// "wal" points to the checkpoint WAL
 	// first check if the checkpoint WAL has been written to
 	auto &fs = FileSystem::Get(db);
+	auto retired_generation = wal->GetCheckpointIteration() - 1;
+	auto needed = NeededWALGeneration();
+	RemoveRetainedWAL(needed.IsValid() ? needed.GetIndex() : retired_generation, retired_generation);
+	if (needed.IsValid() && needed.GetIndex() <= retired_generation) {
+		fs.MoveFile(wal_path, GetRetainedWALPath(retired_generation));
+		if (!retained_wal_start.IsValid()) {
+			retained_wal_start = retired_generation;
+		}
+	}
 	if (!wal->Initialized()) {
 		// the checkpoint WAL has not been written to
 		// this is the common scenario if there are no concurrent writes happening while checkpointing
@@ -323,6 +332,7 @@ void StorageManager::WALFinishCheckpoint(unique_lock<mutex> &) {
 		fs.TryRemoveFile(wal_path);
 		ResetWALEntriesCount();
 		wal = make_uniq<WriteAheadLog>(*this, wal_path);
+		oldest_wal_generation = retained_wal_start.IsValid() ? retained_wal_start.GetIndex() : retired_generation + 1;
 		return;
 	}
 
@@ -333,14 +343,50 @@ void StorageManager::WALFinishCheckpoint(unique_lock<mutex> &) {
 	auto checkpoint_wal_path = wal->GetPath();
 	wal.reset();
 
+	if (Settings::Get<DebugCheckpointAbortSetting>(db.GetDatabase()) ==
+	    CheckpointAbort::DEBUG_ABORT_BEFORE_MOVING_CHECKPOINT_WAL) {
+		throw FatalException(
+		    "Checkpoint aborted before moving the checkpoint WAL because of PRAGMA checkpoint_abort flag");
+	}
+
 	// move the secondary WAL over the main WAL
 	fs.MoveFile(checkpoint_wal_path, wal_path);
 
 	// open what is now the main WAL again
 	wal = make_uniq<WriteAheadLog>(*this, wal_path);
 	wal->Initialize();
+	oldest_wal_generation = retained_wal_start.IsValid() ? retained_wal_start.GetIndex() : retired_generation + 1;
 
 	DUCKDB_LOG(db.GetDatabase(), TransactionLogType, db, "Finish Checkpoint");
+}
+
+optional_idx StorageManager::NeededWALGeneration() {
+	auto extension = db.GetStorageExtension();
+	return extension ? extension->NeededWALGeneration(db) : optional_idx();
+}
+
+void StorageManager::RemoveRetainedWAL(idx_t end, idx_t chain_end) {
+	if (!retained_wal_start.IsValid()) {
+		return;
+	}
+	auto &fs = FileSystem::Get(db);
+	auto generation = retained_wal_start.GetIndex();
+	for (; generation < MinValue(end, chain_end); generation++) {
+		fs.TryRemoveFile(GetRetainedWALPath(generation));
+	}
+	retained_wal_start = generation < chain_end ? optional_idx(generation) : optional_idx();
+}
+
+void StorageManager::ReleaseRetainedWAL(unique_lock<mutex> &) {
+	auto main_generation = GetBlockManager().GetCheckpointIteration();
+	auto needed = NeededWALGeneration();
+	RemoveRetainedWAL(needed.IsValid() ? needed.GetIndex() : main_generation, main_generation);
+	oldest_wal_generation = retained_wal_start.IsValid() ? retained_wal_start.GetIndex() : main_generation;
+}
+
+void StorageManager::SetRetainedWALStart(optional_idx generation) {
+	retained_wal_start = generation;
+	oldest_wal_generation = generation.IsValid() ? generation.GetIndex() : GetBlockManager().GetCheckpointIteration();
 }
 
 unique_lock<mutex> StorageManager::GetCommitLock() {
@@ -357,6 +403,10 @@ string StorageManager::GetCheckpointWALPath() {
 
 string StorageManager::GetRecoveryWALPath() {
 	return GetWALPath(".wal.recovery");
+}
+
+string StorageManager::GetRetainedWALPath(idx_t generation) {
+	return GetWALPath(".wal.retained." + to_string(generation));
 }
 
 bool StorageManager::InMemory() const {
@@ -870,6 +920,13 @@ void SingleFileStorageManager::CreateCheckpoint(QueryContext context, Checkpoint
 			throw IOException("Checkpoint failed for database %s. The database has been invalidated. Original "
 			                  "error: %s",
 			                  db.GetName(), error.RawMessage());
+		}
+	} else if (retained_wal_start.IsValid()) {
+		if (options.commit_lock) {
+			ReleaseRetainedWAL(*options.commit_lock);
+		} else {
+			auto commit_lock = GetCommitLock();
+			ReleaseRetainedWAL(commit_lock);
 		}
 	}
 

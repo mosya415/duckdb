@@ -32,6 +32,9 @@ public:
 
 	optional_ptr<DuckTableEntry> Find(idx_t table_oid);
 	optional_ptr<TableLogStorage> FindLogStorage(idx_t table_oid);
+	bool HasLogTables() const {
+		return !log_tables.empty();
+	}
 	SchemaCatalogEntry &GetSchema(CatalogTransaction transaction, idx_t table_oid);
 	void LoadCheckpoint(BoundCreateTableInfo &info);
 	void Create(ClientContext &context, unique_ptr<CreateInfo> info);
