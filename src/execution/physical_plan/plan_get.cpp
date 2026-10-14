@@ -109,6 +109,7 @@ PhysicalOperator &PhysicalPlanGenerator::CreatePlan(LogicalGet &op) {
 	}
 
 	optional_ptr<PhysicalOperator> filter;
+	optional_ptr<PhysicalOperator> filter_projection;
 	auto &projection_ids = op.projection_ids;
 
 	if (table_filters && (op.function.supports_pushdown_filter || op.function.supports_pushdown_type)) {
@@ -193,6 +194,16 @@ PhysicalOperator &PhysicalPlanGenerator::CreatePlan(LogicalGet &op) {
 				}
 			}
 			filter = Make<PhysicalFilter>(filter_types, std::move(select_list), op.estimated_cardinality);
+			if (filter_types.size() > op.types.size()) {
+				vector<unique_ptr<Expression>> planned_columns;
+				planned_columns.reserve(op.types.size());
+				for (idx_t i = 0; i < op.types.size(); i++) {
+					planned_columns.push_back(make_uniq<BoundReferenceExpression>(op.types[i], i));
+				}
+				filter_projection =
+				    Make<PhysicalProjection>(op.types, std::move(planned_columns), op.estimated_cardinality);
+				filter_projection->children.push_back(*filter);
+			}
 		}
 	}
 	op.ResolveOperatorTypes();
@@ -257,7 +268,7 @@ PhysicalOperator &PhysicalPlanGenerator::CreatePlan(LogicalGet &op) {
 	cast_table_scan.dynamic_filters = op.dynamic_filters;
 	if (filter) {
 		filter->children.push_back(table_scan);
-		return *filter;
+		return filter_projection ? *filter_projection : *filter;
 	}
 	return table_scan;
 }
