@@ -72,6 +72,7 @@ TEST_CASE("Generate serialized plans file", "[.][serialization]") {
 	}
 
 	target.Sync();
+	target.Close();
 
 	test_deserialization(file_location);
 }

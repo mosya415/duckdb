@@ -311,6 +311,14 @@ static FileMetadata StatsInternal(int fd, const string &path) {
 	return StatsFromStruct(s);
 }
 
+#ifdef F_OFD_SETLK
+static constexpr int SET_FILE_LOCK = F_OFD_SETLK;
+static constexpr int GET_FILE_LOCK = F_OFD_GETLK;
+#else
+static constexpr int SET_FILE_LOCK = F_SETLK;
+static constexpr int GET_FILE_LOCK = F_GETLK;
+#endif
+
 // Apply a fcntl advisory lock per flags.Lock(); throws (and closes fd) on failure. Shared
 // by OpenFile and MemoryMapFile.
 static void TryAcquireFileLock(FileSystem &fs, int fd, const string &path, FileOpenFlags flags) {
@@ -328,7 +336,7 @@ static void TryAcquireFileLock(FileSystem &fs, int fd, const string &path, FileO
 	fl.l_whence = SEEK_SET;
 	fl.l_start = 0;
 	fl.l_len = 0;
-	int rc = fcntl(fd, F_SETLK, &fl);
+	int rc = fcntl(fd, SET_FILE_LOCK, &fl);
 	int retained_errno = errno;
 	bool has_error = rc == -1;
 	string extended_error;
@@ -347,9 +355,11 @@ static void TryAcquireFileLock(FileSystem &fs, int fd, const string &path, FileO
 	}
 	if (extended_error.empty()) {
 		// who is holding the lock?
-		rc = fcntl(fd, F_GETLK, &fl);
+		rc = fcntl(fd, GET_FILE_LOCK, &fl);
 		if (rc == -1) {
 			extended_error = strerror(errno);
+		} else if (fl.l_type == F_UNLCK || fl.l_pid <= 0) {
+			extended_error = "Conflicting lock is held by another open of this file";
 		} else if (fl.l_pid == ProcessUtil::CurrentProcessId()) {
 			extended_error = "Lock is already held in current process, likely another SereneDB instance";
 		} else {
@@ -361,8 +371,11 @@ static void TryAcquireFileLock(FileSystem &fs, int fd, const string &path, FileO
 		if (flags.Lock() == FileLockType::WRITE_LOCK) {
 			// could we get a read lock?
 			fl.l_type = F_RDLCK;
-			rc = fcntl(fd, F_SETLK, &fl);
-			if (rc != -1) {
+			fl.l_start = 0;
+			fl.l_len = 0;
+			fl.l_pid = 0;
+			rc = fcntl(fd, GET_FILE_LOCK, &fl);
+			if (rc != -1 && fl.l_type == F_UNLCK) {
 				extended_error += ". However, you would be able to open this database in read-only mode, e.g. by "
 				                  "using the -readonly parameter in the CLI";
 			}
@@ -413,10 +426,10 @@ unique_ptr<FileHandle> LocalFileSystem::OpenFile(const string &path_p, FileOpenF
 	} else {
 		throw InternalException("READ, WRITE or both should be specified when opening a file");
 	}
+	open_flags |= O_CLOEXEC;
 	if (open_write) {
 		// need Read or Write
 		D_ASSERT(flags.OpenForWriting());
-		open_flags |= O_CLOEXEC;
 		if (flags.CreateFileIfNotExists() || flags.OverwriteExistingFile()) {
 			open_flags |= O_CREAT;
 		}
@@ -1046,6 +1059,7 @@ unique_ptr<MemoryMappedFile> LocalFileSystem::MemoryMapFile(const OpenFileInfo &
 	} else {
 		throw InternalException("READ or READ+WRITE must be specified when memory-mapping a file");
 	}
+	open_flags |= O_CLOEXEC;
 	if (open_write && flags.CreateFileIfNotExists()) {
 		open_flags |= O_CREAT;
 	}
