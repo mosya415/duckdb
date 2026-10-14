@@ -75,6 +75,8 @@ public:
 	//! Replay and initialize the WAL, QueryContext is passed for metric collection purposes only!!
 	static unique_ptr<WriteAheadLog> Replay(QueryContext context, StorageManager &storage_manager,
 	                                        const string &wal_path);
+	static void ReplayCatalog(QueryContext context, StorageManager &storage_manager, const string &log_path,
+	                          idx_t catalog_oid);
 
 	AttachedDatabase &GetDatabase();
 	StorageManager &GetStorageManager();
