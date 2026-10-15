@@ -37,6 +37,7 @@ add_library_unity(
   test_substring_oob.cpp
   test_swar.cpp
   test_utf8_codepoint_oob.cpp
+  test_validity_mask_slice.cpp
   test_temporary_memory_manager.cpp
   test_versioning_utils.cpp
   test_value_to_sql_string.cpp
