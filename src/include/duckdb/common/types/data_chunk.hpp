@@ -161,6 +161,7 @@ public:
 	//! function was called. This sets the count to 0, the capacity to initial_capacity and resets each member
 	//! Vector to point back to the data owned by this DataChunk.
 	DUCKDB_API void Reset();
+	DUCKDB_API void ResetColumn(idx_t column_idx);
 
 	DUCKDB_API void Serialize(Serializer &serializer, bool compressed_serialization = true) const;
 	DUCKDB_API void Deserialize(Deserializer &source);

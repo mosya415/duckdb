@@ -129,6 +129,11 @@ void DataChunk::Reset() {
 	}
 }
 
+void DataChunk::ResetColumn(idx_t column_idx) {
+	D_ASSERT(column_idx < vector_caches.size());
+	data[column_idx].ResetFromCache(vector_caches[column_idx]);
+}
+
 void DataChunk::Destroy() {
 	data.clear();
 	vector_caches.clear();
