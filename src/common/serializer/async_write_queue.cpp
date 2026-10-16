@@ -1610,7 +1610,7 @@ void ManagedAsyncWriteStreamQueue::Close() {
 
 void ManagedAsyncWriteStreamQueue::AbortWrites() {
 	std::exception_ptr error;
-	lock_guard<mutex> submission_guard(submission_lock);
+	unique_lock<mutex> submission_guard(submission_lock);
 	idx_t discarded_bytes;
 	shared_ptr<const ErrorData> local_error_ref;
 	{
@@ -1627,6 +1627,8 @@ void ManagedAsyncWriteStreamQueue::AbortWrites() {
 		local_error_ref = local_error;
 	}
 	write_queue->DiscardExternalPendingBytes(discarded_bytes);
+	// After closing and discarding, release the lock before draining completions that may be waiting to refill.
+	submission_guard.unlock();
 	try {
 		write_queue->AbortWrites();
 	} catch (...) {

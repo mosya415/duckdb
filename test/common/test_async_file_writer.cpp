@@ -43,6 +43,29 @@ public:
 		lock_guard<mutex> guard(queue.lock);
 		return queue.pending_bytes;
 	}
+	static ManagedAsyncWriteQueue &UnderlyingQueue(ManagedAsyncWriteStreamQueue &queue) {
+		return *queue.write_queue;
+	}
+
+	static bool WaitForClosed(ManagedAsyncWriteQueue &queue) {
+		lock_guard<mutex> guard(queue.lock);
+		return queue.lock.AwaitWithTimeout(absl::Condition(&queue.closed), absl::Seconds(5));
+	}
+
+	static idx_t PendingBytes(ManagedAsyncWriteStreamQueue &queue) {
+		annotated_lock_guard<annotated_mutex> guard(queue.lock);
+		return queue.pending_bytes;
+	}
+
+	static bool TryCompletionRefill(ManagedAsyncWriteStreamQueue &queue) {
+		// Bound the wait so the broken lock order fails instead of hanging this completion.
+		if (!queue.submission_lock.try_lock()) {
+			return false;
+		}
+		queue.submission_lock.unlock();
+		queue.SchedulePendingWritesInternal();
+		return true;
+	}
 };
 
 } // namespace duckdb
@@ -707,6 +730,35 @@ public:
 	bool release_writes = false;
 };
 
+class SequentialAsyncWriteStreamTarget : public ManagedAsyncWriteStreamTarget {
+public:
+	SequentialAsyncWriteStreamTarget(BlockingAsyncWriteTarget &target_p, bool local_file_p)
+	    : target(target_p), local_file(local_file_p) {
+	}
+
+	FileWriteMode GetWriteMode() override {
+		return FileWriteMode::SEQUENTIAL;
+	}
+
+	bool IsLocalFile() override {
+		return local_file;
+	}
+
+	void Write(data_ptr_t, idx_t, idx_t) override {
+		throw InternalException("Unexpected positional write to sequential test target");
+	}
+
+	void Write(data_ptr_t buffer, idx_t size) override {
+		target.Write(buffer, size, offset);
+		offset += size;
+	}
+
+private:
+	BlockingAsyncWriteTarget &target;
+	const bool local_file;
+	idx_t offset = 0;
+};
+
 class BlockingAsyncTaskState {
 public:
 	bool WaitForStarted(idx_t count) {
@@ -915,6 +967,64 @@ TEST_CASE("ManagedAsyncWriteQueue accepts non-contiguous positional writes", "[a
 	}
 	REQUIRE(saw_first);
 	REQUIRE(saw_second);
+}
+
+TEST_CASE("ManagedAsyncWriteStreamQueue abort permits an in-flight completion refill", "[async_write_queue]") {
+	DuckDB db(nullptr);
+	auto con = CreateConnectionWithAsyncThreads(db);
+	BlockingAsyncWriteTarget target;
+	target.ReleaseWrites();
+	SequentialAsyncWriteStreamTarget stream_target(target, true);
+	ManagedAsyncWriteStreamQueue queue(*con->context, stream_target);
+	auto &underlying_queue = ManagedAsyncWriteQueueTest::UnderlyingQueue(queue);
+	REQUIRE(underlying_queue.IsAsync());
+	mutex completion_lock;
+	bool completion_entered = false;
+	bool release_completion = false;
+	atomic<bool> completion_released {false};
+	atomic<bool> refill_finished {false};
+	// Stand in for a completion that already selected a refill before the stream was closed.
+	auto completion = [&](idx_t, idx_t, optional_ptr<const ErrorData>) {
+		{
+			lock_guard<mutex> guard(completion_lock);
+			completion_entered = true;
+			completion_released =
+			    completion_lock.AwaitWithTimeout(absl::Condition(&release_completion), absl::Seconds(5));
+		}
+		if (completion_released) {
+			refill_finished = ManagedAsyncWriteQueueTest::TryCompletionRefill(queue);
+		}
+	};
+	underlying_queue.RegisterWrite(AsyncWriteRequest(make_uniq<StringAsyncWriteBuffer>("abc"), 0, completion));
+	bool entered_completion;
+	{
+		lock_guard<mutex> guard(completion_lock);
+		entered_completion = completion_lock.AwaitWithTimeout(absl::Condition(&completion_entered), absl::Seconds(5));
+	}
+
+	queue.RegisterWrite(make_uniq<StringAsyncWriteBuffer>("pending"), 0,
+	                    ManagedAsyncWriteStreamQueue::ScheduleMode::DEFER);
+	auto pending_bytes = ManagedAsyncWriteQueueTest::PendingBytes(queue);
+
+	string abort_error;
+	std::thread abort_thread([&]() { abort_error = CaptureException([&]() { queue.AbortWrites(); }); });
+	// Closing the underlying queue follows closing the stream and discarding its pending writes.
+	auto underlying_closed = ManagedAsyncWriteQueueTest::WaitForClosed(underlying_queue);
+	{
+		lock_guard<mutex> guard(completion_lock);
+		release_completion = true;
+	}
+	abort_thread.join();
+
+	REQUIRE(entered_completion);
+	REQUIRE(underlying_closed);
+	REQUIRE(completion_released);
+	REQUIRE(refill_finished);
+	REQUIRE(pending_bytes == 7);
+	REQUIRE(abort_error.empty());
+	REQUIRE(ManagedAsyncWriteQueueTest::PendingBytes(queue) == 0);
+	REQUIRE(ManagedAsyncWriteQueueTest::ExternalPendingBytes(underlying_queue) == 0);
+	REQUIRE(target.write_sizes == vector<idx_t> {3});
 }
 
 TEST_CASE("ManagedAsyncWriteQueue reports accounted request adoption ownership", "[async_write_queue]") {
