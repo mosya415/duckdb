@@ -31,7 +31,7 @@ Value VectorFSSTStringBuffer::GetValue(const LogicalType &type, idx_t index) con
 	case LogicalTypeId::VARCHAR:
 		return Value(std::move(string_val));
 	case LogicalTypeId::BLOB:
-		return Value::BLOB_RAW(string_val);
+		return Value::BLOB_RAW(std::move(string_val));
 	default:
 		throw InternalException("Unsupported type for FSST vector GetValue");
 	}

@@ -182,7 +182,7 @@ Value Literal::ToValue() const {
 			auto byte = StringUtil::GetHexValue(text[i]) * 16 + StringUtil::GetHexValue(text[i + 1]);
 			bytes.push_back(static_cast<char>(byte));
 		}
-		return Value::BLOB_RAW(bytes);
+		return Value::BLOB_RAW(std::move(bytes));
 	}
 	case LiteralKind::BIT:
 		return Value::BIT(text);

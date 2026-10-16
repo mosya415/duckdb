@@ -955,9 +955,13 @@ Value Value::ARRAY(const LogicalType &child_type, vector<Value> values) {
 }
 
 Value Value::BLOB(const_data_ptr_t data, idx_t len) {
+	return BLOB_RAW(string(const_char_ptr_cast(data), len));
+}
+
+Value Value::BLOB_RAW(string data) { // NOLINT
 	Value result(LogicalType::BLOB);
 	result.is_null = false;
-	result.value_info_ = make_shared_ptr<StringValueInfo>(string(const_char_ptr_cast(data), len));
+	result.value_info_ = make_shared_ptr<StringValueInfo>(std::move(data));
 	return result;
 }
 
