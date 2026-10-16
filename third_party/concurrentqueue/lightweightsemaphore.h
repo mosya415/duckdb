@@ -48,6 +48,13 @@ extern "C" {
 #define MOODYCAMEL_LIGHTWEIGHTSEMAPHORE_MONOTONIC
 #endif
 #endif
+
+#if defined(MOODYCAMEL_LIGHTWEIGHTSEMAPHORE_MONOTONIC) && defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#include <sanitizer/tsan_interface.h>
+#define MOODYCAMEL_LIGHTWEIGHTSEMAPHORE_TSAN_ACQUIRE
+#endif
+#endif
 #endif
 
 #ifndef MOODYCAMEL_DELETE_FUNCTION
@@ -261,6 +268,11 @@ public:
 			rc = sem_timedwait(&m_sema, &ts);
 #endif
 		} while (rc == -1 && errno == EINTR);
+#ifdef MOODYCAMEL_LIGHTWEIGHTSEMAPHORE_TSAN_ACQUIRE
+		if (rc == 0) {
+			__tsan_acquire(&m_sema);
+		}
+#endif
 		return rc == 0;
 	}
 
