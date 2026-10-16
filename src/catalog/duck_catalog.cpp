@@ -67,6 +67,43 @@ bool DuckCatalog::IsDuckCatalog() {
 	return true;
 }
 
+namespace {
+
+CatalogType SchemaSetOf(CatalogType type) {
+	switch (type) {
+	case CatalogType::VIEW_ENTRY:
+		return CatalogType::TABLE_ENTRY;
+	case CatalogType::TABLE_MACRO_ENTRY:
+		return CatalogType::TABLE_FUNCTION_ENTRY;
+	case CatalogType::AGGREGATE_FUNCTION_ENTRY:
+	case CatalogType::SCALAR_FUNCTION_ENTRY:
+	case CatalogType::WINDOW_FUNCTION_ENTRY:
+		return CatalogType::MACRO_ENTRY;
+	default:
+		return type;
+	}
+}
+
+} // namespace
+
+optional_ptr<SchemaCatalogEntry> DuckCatalog::FindSchemaById(ClientContext &context, idx_t id) {
+	auto entry = GetOidIndex().GetVisible(id, GetCatalogTransaction(context).view);
+	if (!entry || entry->type != CatalogType::SCHEMA_ENTRY) {
+		return nullptr;
+	}
+	return &entry->Cast<SchemaCatalogEntry>();
+}
+
+optional_ptr<CatalogEntry> DuckCatalog::FindEntryById(optional_ptr<ClientContext> context, CatalogType type, idx_t id) {
+	auto entry =
+	    context ? GetOidIndex().GetVisible(id, GetCatalogTransaction(*context).view) : GetOidIndex().GetCommitted(id);
+	if (!entry || entry->internal || entry->type == CatalogType::SCHEMA_ENTRY ||
+	    SchemaSetOf(entry->type) != SchemaSetOf(type)) {
+		return nullptr;
+	}
+	return entry;
+}
+
 bool DuckCatalog::SupportsMultipleDMLCTEs() const {
 	return true;
 }
