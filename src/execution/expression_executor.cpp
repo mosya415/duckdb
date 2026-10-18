@@ -7,6 +7,7 @@
 #include "duckdb/common/vector/vector_iterator.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/execution/execution_context.hpp"
+#include "duckdb/function/scalar/struct_utils.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
 #include "duckdb/planner/expression/list.hpp"
 #include "duckdb/main/settings.hpp"
@@ -143,9 +144,100 @@ void ExpressionExecutor::ExecuteExpression(idx_t expr_idx, Vector &result) {
 	Execute(*expressions[expr_idx], states[expr_idx]->root_state.get(), nullptr, chunk ? chunk->size() : 1, result);
 }
 
+static bool TryFoldNestedValue(ClientContext &context, const Expression &expr, Value &result) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		return false;
+	}
+	auto &function = expr.Cast<BoundFunctionExpression>();
+	auto &name = function.Function().GetName();
+	const bool is_constructor = name == "list_value" || name == "struct_pack";
+	if (!is_constructor && name != "list_extract" && name != "array_extract" && name != "struct_extract") {
+		return false;
+	}
+	auto &children = function.GetChildren();
+	vector<Value> values;
+	values.reserve(children.size());
+	for (auto &child : children) {
+		if (child->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+			values.push_back(child->Cast<BoundConstantExpression>().GetValue());
+			continue;
+		}
+		Value value;
+		if (child->GetReturnType().IsNested() || !child->IsFoldable() ||
+		    !ExpressionExecutor::TryEvaluateScalar(context, *child, value)) {
+			return false;
+		}
+		values.push_back(std::move(value));
+	}
+	auto &return_type = expr.GetReturnType();
+	if (name == "list_value" && return_type.id() == LogicalTypeId::LIST) {
+		auto &child_type = ListType::GetChildType(return_type);
+		for (auto &value : values) {
+			if (value.type() != child_type) {
+				return false;
+			}
+		}
+		result = Value::LIST(child_type, std::move(values)).WithType(return_type);
+		return true;
+	}
+	if (name == "struct_pack" && return_type.id() == LogicalTypeId::STRUCT) {
+		auto &child_types = StructType::GetChildTypes(return_type);
+		if (child_types.size() != values.size()) {
+			return false;
+		}
+		for (idx_t i = 0; i < values.size(); i++) {
+			if (values[i].type() != child_types[i].second) {
+				return false;
+			}
+		}
+		result = Value::STRUCT(return_type, std::move(values));
+		return true;
+	}
+	if (is_constructor || values.size() != 2) {
+		return false;
+	}
+	auto &input = values[0];
+	if (input.type().id() == LogicalTypeId::LIST) {
+		auto &index = values[1];
+		if (name == "struct_extract" || index.type().id() != LogicalTypeId::BIGINT ||
+		    ListType::GetChildType(input.type()) != return_type) {
+			return false;
+		}
+		if (input.IsNull() || index.IsNull()) {
+			result = Value(return_type);
+			return true;
+		}
+		auto &elements = ListValue::GetChildren(input);
+		const auto offset = BigIntValue::Get(index);
+		const auto length = static_cast<int64_t>(elements.size());
+		if (offset > 0 && offset <= length) {
+			result = elements[static_cast<idx_t>(offset - 1)].WithType(return_type);
+		} else if (offset < 0 && offset >= -length) {
+			result = elements[static_cast<idx_t>(length + offset)].WithType(return_type);
+		} else {
+			result = Value(return_type);
+		}
+		return true;
+	}
+	if (input.type().id() == LogicalTypeId::STRUCT && name != "list_extract" && function.BindInfo()) {
+		auto index = function.BindInfo()->Cast<StructExtractBindData>().index;
+		auto &child_types = StructType::GetChildTypes(input.type());
+		if (index >= child_types.size() || child_types[index].second != return_type) {
+			return false;
+		}
+		result = input.IsNull() ? Value(return_type) : StructValue::GetChildren(input)[index].WithType(return_type);
+		return true;
+	}
+	return false;
+}
+
 Value ExpressionExecutor::EvaluateScalar(ClientContext &context, const Expression &expr, bool allow_unfoldable) {
 	D_ASSERT(allow_unfoldable || expr.IsFoldable());
 	D_ASSERT(expr.IsScalar());
+	Value nested;
+	if (TryFoldNestedValue(context, expr, nested)) {
+		return nested;
+	}
 	// use an ExpressionExecutor to execute the expression
 	ExpressionExecutor executor(context, expr);
 
@@ -199,6 +291,9 @@ ExpressionExecutor::FoldResult ExpressionExecutor::EvaluateFoldable(ClientContex
                                                                     Value &result, idx_t max_size) {
 	D_ASSERT(expr.IsFoldable());
 	D_ASSERT(expr.IsScalar());
+	if (TryFoldNestedValue(context, expr, result)) {
+		return FoldResult::FOLDED;
+	}
 	try {
 		ExpressionExecutor executor(context, expr);
 		Vector vector(expr.GetReturnType());
