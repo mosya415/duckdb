@@ -582,13 +582,15 @@ ErrorData DuckTransactionManager::PrepareTransaction(ClientContext &context, Tra
 
 ErrorData DuckTransactionManager::SyncPreparedTransaction(Transaction &transaction_p) {
 	auto &transaction = transaction_p.Cast<DuckTransaction>();
-	if (!transaction.prepared || transaction.prepared->prepared_offset == 0) {
+	if (!transaction.prepared || !transaction.prepared->commit_state) {
 		return ErrorData();
 	}
 	try {
 		auto &wal = *db.GetStorageManager().GetWAL();
-		wal.SyncUpTo(transaction.prepared->prepared_offset,
-		             [&](idx_t synced_offset) { RetireSyncedCommits(wal, synced_offset); });
+		const auto flushed_offset = wal.GetFlushedOffset();
+		if (flushed_offset > 0) {
+			wal.SyncUpTo(flushed_offset, [&](idx_t synced_offset) { RetireSyncedCommits(wal, synced_offset); });
+		}
 	} catch (std::exception &ex) {
 		return ErrorData(ex);
 	}
