@@ -1,5 +1,7 @@
 #include "duckdb/storage/table_storage_load.hpp"
 
+#include <absl/cleanup/cleanup.h>
+
 #include "duckdb/catalog/catalog_entry/duck_index_entry.hpp"
 #include "duckdb/catalog/catalog_entry/duck_table_entry.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
@@ -240,15 +242,12 @@ void TableStorageLoad::BindExternalIndexes(DuckTableEntry &table, DataTableInfo 
 		}
 		auto bind = [&]() {
 			auto &search_path = *ClientData::Get(load_context).catalog_search_path;
+			absl::Cleanup restore = [&search_path, session_paths = search_path.GetSetPaths()]() mutable noexcept {
+				search_path.RestoreSetPaths(std::move(session_paths));
+			};
 			search_path.Set(CatalogSearchEntry(table.catalog.GetName(), table.ParentSchemaName()),
 			                CatalogSetPathType::SET_SCHEMA);
-			try {
-				info.GetIndexes().Bind(load_context, table, index_type->name);
-			} catch (...) {
-				search_path.Reset();
-				throw;
-			}
-			search_path.Reset();
+			info.GetIndexes().Bind(load_context, table, index_type->name);
 		};
 		if (load_context.transaction.HasActiveTransaction()) {
 			bind();

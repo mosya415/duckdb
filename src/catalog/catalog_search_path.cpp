@@ -177,6 +177,10 @@ void CatalogSearchPath::RefreshSetPaths() {
 	SetPathsInternal(set_paths);
 }
 
+void CatalogSearchPath::RestoreSetPaths(vector<CatalogSearchEntry> paths) {
+	SetPathsInternal(std::move(paths));
+}
+
 string CatalogSearchPath::GetSetName(CatalogSetPathType set_type) {
 	switch (set_type) {
 	case CatalogSetPathType::SET_SCHEMA:

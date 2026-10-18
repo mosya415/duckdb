@@ -69,6 +69,7 @@ public:
 	DUCKDB_API void Set(vector<CatalogSearchEntry> new_paths, CatalogSetPathType set_type);
 	DUCKDB_API void Reset();
 	DUCKDB_API void RefreshSetPaths();
+	DUCKDB_API void RestoreSetPaths(vector<CatalogSearchEntry> paths);
 	//! Record a connection-level default restored on Reset() (RESET search_path,
 	//! RESET ALL).
 	DUCKDB_API void SetDefaultPaths(vector<CatalogSearchEntry> new_defaults);
