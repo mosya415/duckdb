@@ -299,6 +299,7 @@ static void CreateSerialSequences(CatalogTransaction transaction, DuckSchemaEntr
 		sequence_info.SetQualifiedName(schema.GetQualifiedName(serial.name));
 		sequence_info.max_value =
 		    Value::MaximumValue(table.columns.GetColumn(serial.column).Type()).GetValue<int64_t>();
+		sequence_info.permissions = std::move(serial.permissions);
 		auto &sequence = *schema.CreateSequence(transaction, sequence_info);
 		LogicalDependency dependency(sequence);
 		dependency.owned_by = true;
