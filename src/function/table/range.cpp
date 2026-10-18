@@ -6,6 +6,7 @@
 #include "duckdb/common/operator/subtract.hpp"
 #include "duckdb/common/atomic.hpp"
 #include "duckdb/common/vector/vector_iterator.hpp"
+#include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/main/client_config.hpp"
 
 namespace duckdb {
@@ -57,10 +58,10 @@ struct RangeFunctionBindData : public TableFunctionData {
 	idx_t cardinality;
 };
 
-template <bool GENERATE_SERIES>
+template <bool GENERATE_SERIES, bool INTEGER_RESULT = false>
 static unique_ptr<FunctionData> RangeFunctionBind(ClientContext &context, TableFunctionBindInput &input,
                                                   vector<LogicalType> &return_types, vector<Identifier> &names) {
-	return_types.emplace_back(LogicalType::BIGINT);
+	return_types.emplace_back(INTEGER_RESULT ? LogicalType::INTEGER : LogicalType::BIGINT);
 	if (GENERATE_SERIES) {
 		names.emplace_back("generate_series");
 	} else {
@@ -159,6 +160,7 @@ struct RangeFunctionLocalState : public LocalTableFunctionState {
 	idx_t morsel_end = 0;
 	idx_t batch_index = 0;
 
+	vector<Vector> casted_parameters;
 	vector<VectorIterator<int64_t>> parameters;
 };
 
@@ -168,14 +170,22 @@ static unique_ptr<LocalTableFunctionState> RangeFunctionLocalInit(ExecutionConte
 	return make_uniq<RangeFunctionLocalState>(global_state);
 }
 
-static void ReadRangeParameters(const DataChunk &input, RangeFunctionLocalState &state) {
+static void ReadRangeParameters(DataChunk &input, RangeFunctionLocalState &state) {
 	if (input.ColumnCount() > 3) {
 		throw InternalException("Unsupported parameter count for range function");
 	}
 	state.parameters.clear();
+	state.casted_parameters.clear();
 	state.parameters.reserve(input.ColumnCount());
+	state.casted_parameters.reserve(input.ColumnCount());
 	for (auto &column : input.data) {
-		state.parameters.emplace_back(column);
+		if (column.GetType().id() == LogicalTypeId::BIGINT) {
+			state.parameters.emplace_back(column);
+			continue;
+		}
+		state.casted_parameters.emplace_back(LogicalType::BIGINT, input.size());
+		VectorOperations::DefaultCast(column, state.casted_parameters.back(), input.size());
+		state.parameters.emplace_back(state.casted_parameters.back());
 	}
 }
 
@@ -732,6 +742,14 @@ void RangeTableFunction::RegisterFunction(BuiltinFunctions &set) {
 	range_function.GetSignature() = start_stop;
 	generate_series.AddFunction(range_function);
 	range_function.GetSignature() = start_stop_step;
+	generate_series.AddFunction(range_function);
+	// integer arguments generate integers, as in PostgreSQL
+	range_function.bind = RangeFunctionBind<true, true>;
+	range_function.GetSignature() = FunctionSignature()
+	                                    .AddPositionalOnly("start", LogicalType::INTEGER)
+	                                    .AddPositionalOnly("stop", LogicalType::INTEGER);
+	generate_series.AddFunction(range_function);
+	range_function.GetSignature().AddPositionalOnly("step", LogicalType::INTEGER);
 	generate_series.AddFunction(range_function);
 	TableFunction generate_series_in_out(timestamps, nullptr, RangeDateTimeBind<true>, RangeDateTimeGlobalInit,
 	                                     RangeDateTimeLocalInit);
