@@ -1169,13 +1169,17 @@ void LogQueryPathSetting::OnSet(SettingCallbackInfo &info, Value &input) {
 	}
 	auto &client_data = ClientData::Get(*info.context);
 	auto path = input.ToString();
+	auto &writer = client_data.log_query_writer;
 	if (path.empty()) {
 		// empty path: clean up query writer
-		client_data.log_query_writer = nullptr;
-	} else {
-		client_data.log_query_writer = make_uniq<BufferedFileWriter>(FileSystem::GetFileSystem(*info.context), path,
-		                                                             BufferedFileWriter::DEFAULT_OPEN_FLAGS);
+		writer = nullptr;
+		return;
 	}
+	if (writer && writer->path == path) {
+		writer = nullptr;
+	}
+	writer = make_uniq<BufferedFileWriter>(FileSystem::GetFileSystem(*info.context), path,
+	                                       BufferedFileWriter::DEFAULT_OPEN_FLAGS);
 }
 
 //===----------------------------------------------------------------------===//
