@@ -156,7 +156,7 @@ string PEGTransformerFactory::ResolveCopyFormat(const string &format, const stri
 	// routing sees it: an explicit FORMAT wins; else the file extension; else
 	// PG's text default (STDIN/STDOUT and extensionless paths).
 	if (!format.empty()) {
-		return format;
+		return StringUtil::Lower(format);
 	}
 	auto extracted = ExtractFormat(file_path);
 	return extracted.empty() ? "text" : extracted;
