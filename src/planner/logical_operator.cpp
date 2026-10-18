@@ -34,6 +34,28 @@ vector<ColumnBinding> LogicalOperator::GetColumnBindings() {
 	return {ColumnBinding(TableIndex(0), ProjectionIndex(0))};
 }
 
+optional_ptr<LogicalOperator> LogicalOperator::GetBindingChild() {
+	return nullptr;
+}
+
+void LogicalOperator::DeriveColumnBindings(vector<ColumnBinding> &bindings) {
+}
+
+vector<ColumnBinding> LogicalOperator::GetDerivedColumnBindings() {
+	vector<reference<LogicalOperator>> chain;
+	reference<LogicalOperator> source = *this;
+	for (auto child = GetBindingChild(); child; child = source.get().GetBindingChild()) {
+		chain.push_back(source);
+		source = *child;
+	}
+	D_ASSERT(!chain.empty());
+	auto bindings = source.get().GetColumnBindings();
+	for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+		it->get().DeriveColumnBindings(bindings);
+	}
+	return bindings;
+}
+
 TableIndex LogicalOperator::GetRootIndex() {
 	auto bindings = GetColumnBindings();
 	if (bindings.empty()) {

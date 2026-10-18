@@ -117,6 +117,9 @@ public:
 protected:
 	//! Resolve types for this specific operator
 	virtual void ResolveTypes() = 0;
+	virtual optional_ptr<LogicalOperator> GetBindingChild();
+	virtual void DeriveColumnBindings(vector<ColumnBinding> &bindings);
+	vector<ColumnBinding> GetDerivedColumnBindings();
 
 public:
 	template <class TARGET>

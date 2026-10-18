@@ -39,11 +39,7 @@ public:
 
 public:
 	vector<ColumnBinding> GetColumnBindings() override {
-		auto child_bindings = children[0]->GetColumnBindings();
-		if (!HasProjectionMap()) {
-			return child_bindings;
-		}
-		return MapBindings(child_bindings, projection_map);
+		return GetDerivedColumnBindings();
 	}
 
 	bool HasProjectionMap() const override {
@@ -62,6 +58,14 @@ protected:
 			types = child_types;
 		} else {
 			types = MapTypes(child_types, projection_map);
+		}
+	}
+	optional_ptr<LogicalOperator> GetBindingChild() override {
+		return children[0].get();
+	}
+	void DeriveColumnBindings(vector<ColumnBinding> &bindings) override {
+		if (HasProjectionMap()) {
+			bindings = MapBindings(bindings, projection_map);
 		}
 	}
 };
