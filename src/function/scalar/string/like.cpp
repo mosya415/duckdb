@@ -243,6 +243,25 @@ struct LikeSegment {
 	explicit LikeSegment(string pattern_p) : pattern(std::move(pattern_p)), finder(pattern) {
 	}
 
+	template <bool IGNORE_CASE>
+	bool At(const_data_ptr_t str) const {
+		if constexpr (IGNORE_CASE) {
+			return duckdb_re2::LiteralFinder::EqualIgnoreCase(const_char_ptr_cast(str), pattern.c_str(),
+			                                                  pattern.size());
+		}
+		return memcmp(str, pattern.c_str(), pattern.size()) == 0;
+	}
+
+	template <bool IGNORE_CASE>
+	idx_t Find(const_data_ptr_t str, idx_t str_len) const {
+		if constexpr (IGNORE_CASE) {
+			auto begin = const_char_ptr_cast(str);
+			auto found = finder.FindIgnoreCase(pattern, begin, begin + str_len);
+			return found ? UnsafeNumericCast<idx_t>(found - begin) : DConstants::INVALID_INDEX;
+		}
+		return FindStrInStr(str, str_len, const_uchar_ptr_cast(pattern.c_str()), pattern.size(), finder);
+	}
+
 	string pattern;
 	duckdb_re2::LiteralFinder finder;
 };
@@ -255,6 +274,7 @@ struct LikeMatcher : public FunctionData {
 	      has_end_percentage(has_end_percentage) {
 	}
 
+	template <bool IGNORE_CASE = false>
 	bool Match(string_t &str) {
 		auto str_data = const_uchar_ptr_cast(str.GetData());
 		auto str_len = str.GetSize();
@@ -266,7 +286,7 @@ struct LikeMatcher : public FunctionData {
 			if (str_len < segment.pattern.size()) {
 				return false;
 			}
-			if (memcmp(str_data, segment.pattern.c_str(), segment.pattern.size()) != 0) {
+			if (!segment.At<IGNORE_CASE>(str_data)) {
 				return false;
 			}
 			str_data += segment.pattern.size();
@@ -283,8 +303,7 @@ struct LikeMatcher : public FunctionData {
 		for (; segment_idx < end_idx; segment_idx++) {
 			auto &segment = segments[segment_idx];
 			// find the pattern of the current segment
-			idx_t next_offset = FindStrInStr(str_data, str_len, const_uchar_ptr_cast(segment.pattern.c_str()),
-			                                 segment.pattern.size(), segment.finder);
+			idx_t next_offset = segment.Find<IGNORE_CASE>(str_data, str_len);
 			if (next_offset == DConstants::INVALID_INDEX) {
 				// could not find this pattern in the string: no match
 				return false;
@@ -300,17 +319,14 @@ struct LikeMatcher : public FunctionData {
 			if (str_len < segment.pattern.size()) {
 				return false;
 			}
-			if (memcmp(str_data + str_len - segment.pattern.size(), segment.pattern.c_str(), segment.pattern.size()) !=
-			    0) {
+			if (!segment.At<IGNORE_CASE>(str_data + str_len - segment.pattern.size())) {
 				return false;
 			}
 			return true;
 		} else {
 			auto &segment = segments.back();
 			// find the pattern of the current segment
-			idx_t next_offset = FindStrInStr(str_data, str_len, const_uchar_ptr_cast(segment.pattern.c_str()),
-			                                 segment.pattern.size(), segment.finder);
-			return next_offset != DConstants::INVALID_INDEX;
+			return segment.Find<IGNORE_CASE>(str_data, str_len) != DConstants::INVALID_INDEX;
 		}
 	}
 
@@ -565,17 +581,16 @@ struct ILikeMatcher {
 			memcpy(copy, lowered.pattern.GetData(), size);
 			lowered.pattern = string_t(copy, UnsafeNumericCast<uint32_t>(size));
 		}
-		// Build a case-insensitive matcher from the lowercased pattern. Because both the pattern and each string
-		// value are lowercased, a case-sensitive LikeMatcher over lowercased data is equivalent to ILIKE, and it
-		// uses the fast SIMD FindStrInStr/memcmp contains path. Returns null for patterns with '_' or only '%';
-		// in that case we fall back to the generic recursive matcher on the lowercased values.
 		matcher =
 		    LikeMatcher::CreateLikeMatcher(string(lowered.pattern.GetData(), size), lowered.has_escape, lowered.escape);
 	}
 
 	template <bool KNOWN_ASCII>
 	bool Match(string_t &str, ILikeBuffer &lowered_str) {
-		if (KNOWN_ASCII) {
+		if (KNOWN_ASCII || FirstNonAscii(str.GetData(), str.GetSize()) == str.GetSize()) {
+			if (matcher) {
+				return matcher->Match<true>(str);
+			}
 			return lowered.Match<ASCIILCaseReader>(str);
 		}
 		auto str_lcase = lowered_str.Lower(str);
@@ -604,7 +619,6 @@ struct ILikeLocalState : public FunctionLocalState {
 		return {pattern.Lower(input), has_escape, escape_char};
 	}
 
-	// reusable scratch buffer for lowercasing each string value (grown on demand)
 	ILikeBuffer str;
 	ILikeBuffer escaped;
 	ILikeBuffer pattern;
@@ -621,7 +635,7 @@ unique_ptr<FunctionLocalState> ILikeInitLocalState(ExpressionState &state, const
 template <bool KNOWN_ASCII>
 bool ILikeOperatorFunction(ILikeLocalState &lstate, string_t str, string_t pattern, string_t escape) {
 	auto pat_lcase = lstate.LowerPattern(pattern, escape);
-	if (KNOWN_ASCII) {
+	if (KNOWN_ASCII || FirstNonAscii(str.GetData(), str.GetSize()) == str.GetSize()) {
 		return pat_lcase.Match<ASCIILCaseReader>(str);
 	}
 	auto str_lcase = lstate.str.Lower(str);
@@ -674,8 +688,6 @@ void ILikeConstantPattern(ILikeLocalState &lstate, const Vector &str_vec, string
 	});
 }
 
-// Execution function for ILIKE / NOT ILIKE ... ESCAPE. Mirrors ILikeFunction: when the pattern and escape are
-// both constant, lowercase the pattern once and reuse a scratch buffer for the per-row string lowercasing.
 template <bool INVERT>
 void ILikeEscapeFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &lstate = ExecuteFunctionState::GetFunctionState(state)->Cast<ILikeLocalState>();
