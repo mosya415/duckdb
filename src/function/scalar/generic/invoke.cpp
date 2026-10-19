@@ -62,6 +62,12 @@ struct LambdaInvokeData final : public LambdaFunctionData {
 		auto &bound_lambda_expr = lambda_expr->Cast<BoundLambdaExpression>();
 		return bound_lambda_expr.LambdaExpr().get();
 	}
+
+	void SetLambdaExpression(shared_ptr<Expression> expr) override {
+		auto lambda = lambda_expr->Copy();
+		lambda->Cast<BoundLambdaExpression>().SetLambdaExpr(std::move(expr));
+		lambda_expr = shared_ptr<Expression>(std::move(lambda));
+	}
 };
 
 struct LambdaInvokeState final : public FunctionLocalState {
