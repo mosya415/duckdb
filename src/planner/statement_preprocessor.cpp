@@ -5,11 +5,16 @@
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/pragma_function_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/parsed_data/alter_sequence_info.hpp"
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
+#include "duckdb/parser/parsed_data/create_sequence_info.hpp"
 #include "duckdb/parser/query_node/delete_query_node.hpp"
+#include "duckdb/parser/query_node/update_query_node.hpp"
 #include "duckdb/parser/statement/alter_statement.hpp"
+#include "duckdb/parser/statement/create_statement.hpp"
 #include "duckdb/parser/statement/delete_statement.hpp"
+#include "duckdb/parser/statement/update_statement.hpp"
 #include "duckdb/parser/tableref/basetableref.hpp"
 #include "duckdb/parser/statement/multi_statement.hpp"
 #include "duckdb/parser/parsed_data/bound_pragma_info.hpp"
@@ -189,6 +194,12 @@ void StatementPreprocessor::ExpandTruncate(MultiStatement &multi_statement) cons
 	                                  std::make_move_iterator(restarts.end()));
 }
 
+static unique_ptr<ParsedExpression> NextvalOf(const Identifier &sequence) {
+	vector<unique_ptr<ParsedExpression>> arguments;
+	arguments.push_back(ConstantExpression::String(QualifiedName(sequence).ToString()));
+	return make_uniq<FunctionExpression>(Identifier("nextval"), std::move(arguments));
+}
+
 void StatementPreprocessor::ResolveAddColumn(MultiStatement &multi_statement) const {
 	auto &statements = multi_statement.statements;
 	if (statements.size() < 2 || statements[0]->type != StatementType::ALTER_STATEMENT) {
@@ -200,12 +211,56 @@ void StatementPreprocessor::ResolveAddColumn(MultiStatement &multi_statement) co
 		return;
 	}
 	auto &add_column = alter.Cast<AddColumnInfo>();
-	if (add_column.if_not_found != OnEntryNotFound::RETURN_NULL) {
+	auto entry = Catalog::GetEntry(context, EntryLookupInfo(CatalogType::TABLE_ENTRY, add_column.GetQualifiedName()),
+	                               OnEntryNotFound::RETURN_NULL);
+	if (!entry) {
+		if (add_column.if_not_found == OnEntryNotFound::RETURN_NULL) {
+			statements.resize(1);
+		}
 		return;
 	}
-	if (!Catalog::GetEntry(context, EntryLookupInfo(CatalogType::TABLE_ENTRY, add_column.GetQualifiedName()),
-	                       OnEntryNotFound::RETURN_NULL)) {
-		statements.resize(1);
+	if (entry->type != CatalogType::TABLE_ENTRY) {
+		return;
+	}
+	auto &table = entry->Cast<TableCatalogEntry>();
+	auto &column = add_column.new_column.Name();
+	if (add_column.if_column_not_exists) {
+		if (table.ColumnExists(column)) {
+			statements.resize(1);
+			return;
+		}
+		add_column.if_column_not_exists = false;
+		statements[0]->query = statements[0]->ToString();
+	}
+	for (auto &statement : statements) {
+		if (statement->type != StatementType::CREATE_STATEMENT) {
+			continue;
+		}
+		auto &info = *statement->Cast<CreateStatement>().info;
+		if (info.type != CatalogType::SEQUENCE_ENTRY || !info.Cast<CreateSequenceInfo>().serial) {
+			continue;
+		}
+		auto &sequence = info.Cast<CreateSequenceInfo>();
+		auto transaction = table.ParentCatalog().GetCatalogTransaction(context);
+		auto name = Binder::FreeSequenceName(transaction, table.ParentSchema(transaction), table.name, column);
+		sequence.SetQualifiedName(table.GetQualifiedName(name));
+		sequence.temporary = table.temporary;
+		sequence.owned_by = table.GetQualifiedName(table.name).Path();
+		sequence.owned_by.push_back(column);
+		statement->query = statement->ToString();
+		for (auto &step : statements) {
+			if (step->type == StatementType::UPDATE_STATEMENT) {
+				step->Cast<UpdateStatement>().node->set_info->expressions[0] = NextvalOf(name);
+				step->query = step->ToString() + ";";
+			} else if (step->type == StatementType::ALTER_STATEMENT) {
+				auto &step_info = *step->Cast<AlterStatement>().info;
+				if (step_info.type == AlterType::ALTER_TABLE &&
+				    step_info.Cast<AlterTableInfo>().alter_table_type == AlterTableType::SET_DEFAULT) {
+					step_info.Cast<SetDefaultInfo>().expression = NextvalOf(name);
+					step->query = step->ToString();
+				}
+			}
+		}
 	}
 }
 

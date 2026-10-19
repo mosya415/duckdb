@@ -252,6 +252,31 @@ string PEGTransformerFactory::TransformDotColLabel(PEGTransformer &transformer, 
 	return col_label;
 }
 
+bool PEGTransformerFactory::TransformSerialType(LogicalType &type) {
+	if (!type.IsUnbound()) {
+		return false;
+	}
+	auto &expr = UnboundType::GetTypeExpression(type);
+	if (expr->GetExpressionClass() != ExpressionClass::TYPE) {
+		return false;
+	}
+	auto &type_expr = expr->Cast<TypeExpression>();
+	if (!type_expr.GetQualifiedName().Schema().empty()) {
+		return false;
+	}
+	auto type_name = type_expr.GetTypeName().GetIdentifierName();
+	if (type_name == "serial") {
+		type = LogicalType::INTEGER;
+	} else if (type_name == "bigserial") {
+		type = LogicalType::BIGINT;
+	} else if (type_name == "smallserial") {
+		type = LogicalType::SMALLINT;
+	} else {
+		return false;
+	}
+	return true;
+}
+
 ConstraintColumnDefinition PEGTransformerFactory::TransformColumnDefinition(
     PEGTransformer &transformer, const Identifier &identifier, const optional<LogicalType> &type,
     optional<GeneratedColumnDefinition> generated_column, optional<vector<ColumnConstraintEntry>> column_constraint) {
@@ -345,26 +370,7 @@ ConstraintColumnDefinition PEGTransformerFactory::TransformColumnDefinition(
 		return result;
 	}
 
-	bool serial = false;
-	if (column_type.IsUnbound()) {
-		auto &expr = UnboundType::GetTypeExpression(column_type);
-		if (expr->GetExpressionClass() == ExpressionClass::TYPE) {
-			auto &type_expr = expr->Cast<TypeExpression>();
-			if (type_expr.GetQualifiedName().Schema().empty()) {
-				auto type_name = type_expr.GetTypeName().GetIdentifierName();
-				if (type_name == "serial") {
-					column_type = LogicalType::INTEGER;
-					serial = true;
-				} else if (type_name == "bigserial") {
-					column_type = LogicalType::BIGINT;
-					serial = true;
-				} else if (type_name == "smallserial") {
-					column_type = LogicalType::SMALLINT;
-					serial = true;
-				}
-			}
-		}
-	}
+	bool serial = TransformSerialType(column_type);
 	if (serial && !accumulated_constraints.has_not_null) {
 		accumulated_constraints.has_not_null = true;
 		accumulated_constraints.constraint_types.push_back(ColumnConstraintTypeInfo {false, ConstraintType::NOT_NULL});

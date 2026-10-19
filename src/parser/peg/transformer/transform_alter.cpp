@@ -10,7 +10,10 @@
 #include "duckdb/parser/parsed_data/alter_scalar_function_info.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/parsed_data/alter_database_info.hpp"
+#include "duckdb/parser/parsed_data/create_sequence_info.hpp"
+#include "duckdb/parser/statement/create_statement.hpp"
 #include "duckdb/parser/parsed_data/alter_schema_info.hpp"
 #include "duckdb/parser/parsed_data/alter_sequence_info.hpp"
 #include "duckdb/parser/statement/multi_statement.hpp"
@@ -52,13 +55,36 @@ unique_ptr<SQLStatement> PEGTransformerFactory::TransformAlterStatement(PEGTrans
 		                      column_entry.GetName().GetIdentifierName(),
 		                      add_column.GetQualifiedName().Name().GetIdentifierName());
 	}
+	unique_ptr<SQLStatement> serial_sequence;
+	if (follow_ups.serial) {
+		auto &table = add_column.GetQualifiedName();
+		if (column_entry.HasDefaultValue()) {
+			throw ParserException("multiple default values specified for column \"%s\" of table \"%s\"",
+			                      column_entry.GetName().GetIdentifierName(), table.Name().GetIdentifierName());
+		}
+		auto sequence_name = table.WithName(
+		    Identifier(table.Name().GetIdentifierName() + "_" + column_entry.GetName().GetIdentifierName() + "_seq"));
+		auto sequence = make_uniq<CreateSequenceInfo>();
+		sequence->SetQualifiedName(sequence_name);
+		sequence->max_value = Value::MaximumValue(column_entry.Type()).GetValue<int64_t>();
+		sequence->owned_by = table.Path();
+		sequence->owned_by.push_back(column_entry.GetName());
+		sequence->serial = true;
+		auto create_sequence = make_uniq<CreateStatement>();
+		create_sequence->info = std::move(sequence);
+		create_sequence->query = create_sequence->ToString();
+		serial_sequence = std::move(create_sequence);
+		vector<unique_ptr<ParsedExpression>> arguments;
+		arguments.push_back(ConstantExpression::String(sequence_name.ToString()));
+		column_entry.SetDefaultValue(make_uniq<FunctionExpression>(Identifier("nextval"), std::move(arguments)));
+	}
 	const bool materialize_default =
 	    column_entry.HasDefaultValue() && !IsSimpleDefaultValue(column_entry.DefaultValue());
 	if (!follow_ups.add_not_null && !follow_ups.add_unique && !follow_ups.add_primary_key && !materialize_default) {
 		return std::move(result);
 	}
 
-	if (add_column.if_column_not_exists) {
+	if (add_column.if_column_not_exists && !follow_ups.serial) {
 		if (follow_ups.add_not_null) {
 			throw NotImplementedException("Adding a NOT NULL column with IF NOT EXISTS is not supported");
 		}
@@ -82,7 +108,7 @@ unique_ptr<SQLStatement> PEGTransformerFactory::TransformAlterStatement(PEGTrans
 		    alter_entry_data,
 		    make_uniq<AddColumnInfo>(add_column.GetAlterEntryData(), std::move(null_column),
 		                             add_column.if_column_not_exists, AddColumnConstraints()),
-		    column_name.GetIdentifierName(), column_entry.DefaultValue().Copy());
+		    column_name.GetIdentifierName(), column_entry.DefaultValue().Copy(), std::move(serial_sequence));
 	} else {
 		multi_statement = make_uniq<MultiStatement>();
 		add_column.add_column_constraints = AddColumnConstraints();
@@ -374,7 +400,7 @@ void PEGTransformerFactory::AddUpdateToMultiStatement(const unique_ptr<MultiStat
 
 unique_ptr<MultiStatement> PEGTransformerFactory::TransformAndMaterializeAlter(
     AlterEntryData &data, unique_ptr<AlterInfo> info_with_null_placeholder, const string &column_name,
-    unique_ptr<ParsedExpression> expression) {
+    unique_ptr<ParsedExpression> expression, unique_ptr<SQLStatement> before_update) {
 	auto multi_statement = make_uniq<MultiStatement>();
 	/* Here we do a workaround that consists of the following statements:
 	 *	 1. `ALTER TABLE t ADD COLUMN col <type> DEFAULT NULL;`
@@ -391,6 +417,9 @@ unique_ptr<MultiStatement> PEGTransformerFactory::TransformAndMaterializeAlter(
 
 	// 1. `ALTER TABLE t ADD COLUMN col <type> DEFAULT NULL;`
 	AddToMultiStatement(multi_statement, std::move(info_with_null_placeholder));
+	if (before_update) {
+		multi_statement->statements.push_back(std::move(before_update));
+	}
 
 	// 2. `UPDATE t SET u = <expression>;`
 	AddUpdateToMultiStatement(multi_statement, column_name, data, expression);
@@ -456,6 +485,10 @@ AddColumnEntry PEGTransformerFactory::TransformAddColumnEntry(
 	}
 	if (type) {
 		new_column.type = *type;
+		if (TransformSerialType(new_column.type)) {
+			new_column.add_column_constraints.serial = true;
+			new_column.add_column_constraints.add_not_null = true;
+		}
 	}
 	if (column_constraint) {
 		for (auto &constraint : *column_constraint) {

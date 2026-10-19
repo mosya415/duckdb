@@ -412,8 +412,8 @@ optional_ptr<CatalogEntry> DuckSchemaEntry::CreateSequence(CatalogTransaction tr
 		                              Identifier(), OnEntryNotFound::THROW_EXCEPTION);
 		ownership.owner_path = info.owned_by;
 		if (catalog.Compatibility() != SqlCompatibility::POSTGRES) {
-			auto owner =
-			    QualifiedName(vector<Identifier>(info.owned_by.begin(), info.owned_by.end() - 1), info.owned_by.back());
+			auto owner_end = info.serial ? info.owned_by.end() - 1 : info.owned_by.end();
+			auto owner = QualifiedName(vector<Identifier>(info.owned_by.begin(), owner_end - 1), *(owner_end - 1));
 			ownership.owner_schema = owner.Schema().empty() ? name : owner.Schema();
 			ownership.owner_name = owner.Name();
 		}

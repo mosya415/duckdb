@@ -280,6 +280,8 @@ public:
 	static vector<QualifiedName> TruncateIdentitySequences(ClientContext &context, TableCatalogEntry &table);
 	static bool DefaultNamesSequence(const ColumnDefinition &column, const QualifiedName &sequence,
 	                                 const IdentifierEquality &equals);
+	static Identifier FreeSequenceName(CatalogTransaction transaction, SchemaCatalogEntry &schema,
+	                                   const Identifier &table, const Identifier &column);
 
 	//! The client context
 	ClientContext &context;

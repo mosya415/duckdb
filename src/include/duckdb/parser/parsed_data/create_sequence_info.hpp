@@ -57,6 +57,7 @@ struct CreateSequenceInfo : public CreateInfo {
 	optional<int64_t> last_value;
 	optional<int64_t> recorded_start;
 	vector<Identifier> owned_by;
+	bool serial = false;
 
 public:
 	unique_ptr<CreateInfo> Copy() const override;
