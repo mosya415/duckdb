@@ -155,16 +155,20 @@ void TaskScheduler::ScheduleTasks(ProducerToken &producer, vector<shared_ptr<Tas
 }
 
 void TaskScheduler::ScheduleTask(ProducerToken &token, shared_ptr<Task> task, TaskSchedulerType pool_type) {
-	Enqueue(token, &task, 1, pool_type);
+	Enqueue(token, &task, 1, pool_type, true);
 }
 
 void TaskScheduler::ScheduleTasks(ProducerToken &producer, vector<shared_ptr<Task>> &tasks,
                                   TaskSchedulerType pool_type) {
-	Enqueue(producer, tasks.data(), tasks.size(), pool_type);
+	Enqueue(producer, tasks.data(), tasks.size(), pool_type, true);
 }
 
-void TaskScheduler::Enqueue(ProducerToken &producer, shared_ptr<Task> *tasks, idx_t count,
-                            TaskSchedulerType pool_type) {
+void TaskScheduler::RescheduleTask(ProducerToken &producer, shared_ptr<Task> task) {
+	Enqueue(producer, &task, 1, TaskSchedulerType::REGULAR, false);
+}
+
+void TaskScheduler::Enqueue(ProducerToken &producer, shared_ptr<Task> *tasks, idx_t count, TaskSchedulerType pool_type,
+                            bool keep_in_task) {
 	if (count == 0) {
 		return;
 	}
@@ -179,8 +183,8 @@ void TaskScheduler::Enqueue(ProducerToken &producer, shared_ptr<Task> *tasks, id
 			tasks[i]->token = producer;
 			tasks[i]->blocking = blocking;
 		}
-		keep_claim = !blocking && count == 1 && current_worker && !current_worker->rotate &&
-		             current_worker->account.get() == account.get();
+		keep_claim = !blocking && count == 1 && current_worker && (keep_in_task || !current_worker->in_task) &&
+		             !current_worker->rotate && current_worker->account.get() == account.get();
 		activated = queue.Enqueue(producer, tasks, count, keep_claim);
 		producer.producer_cv.Signal();
 	}
