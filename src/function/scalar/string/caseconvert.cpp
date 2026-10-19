@@ -55,7 +55,8 @@ static idx_t GetResultLength(const char *input_data, idx_t input_length) {
 }
 
 template <bool IS_UPPER>
-static void CaseConvert(const char *input_data, idx_t input_length, char *result_data) {
+static idx_t CaseConvert(const char *input_data, idx_t input_length, char *result_data) {
+	auto result_start = result_data;
 	for (idx_t i = 0; i < input_length;) {
 		if (input_data[i] & 0x80) {
 			// non-ascii character
@@ -76,14 +77,15 @@ static void CaseConvert(const char *input_data, idx_t input_length, char *result
 			i++;
 		}
 	}
+	return UnsafeNumericCast<idx_t>(result_data - result_start);
 }
 
 idx_t LowerLength(const char *input_data, idx_t input_length) {
 	return GetResultLength<false>(input_data, input_length);
 }
 
-void LowerCase(const char *input_data, idx_t input_length, char *result_data) {
-	CaseConvert<false>(input_data, input_length, result_data);
+idx_t LowerCase(const char *input_data, idx_t input_length, char *result_data) {
+	return CaseConvert<false>(input_data, input_length, result_data);
 }
 
 template <bool IS_UPPER>

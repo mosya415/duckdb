@@ -532,9 +532,8 @@ struct ILikeBuffer {
 	}
 
 	string_t Lower(string_t input) {
-		auto lower_size = LowerLength(input.GetData(), input.GetSize());
-		auto result = Reserve(lower_size);
-		LowerCase(input.GetData(), input.GetSize(), result);
+		auto result = Reserve(2 * input.GetSize());
+		auto lower_size = LowerCase(input.GetData(), input.GetSize(), result);
 		return string_t(result, UnsafeNumericCast<uint32_t>(lower_size));
 	}
 
