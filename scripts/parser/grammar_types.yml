@@ -1593,6 +1593,16 @@ SecretPersistType:
     - TempPersistent
     - TemporaryPersistent
 
+DiscardTarget:
+  type: "DiscardTarget"
+  by_value: false
+  rules:
+    - DiscardTarget
+    - DiscardAll
+    - DiscardPlans
+    - DiscardSequences
+    - DiscardTemp
+
 InsertColumnOrder:
   type: "InsertColumnOrder"
   by_value: false
@@ -2202,7 +2212,6 @@ excluded_rules:
   # expression.gram rules kept manual during incremental transformer generation migration
   - OverClause
   - PrefixExpression
-  - DiscardTarget
   - ShowSettingAlias
   - ChainClause
   - NoChain

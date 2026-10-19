@@ -504,14 +504,21 @@ static PreparedStatementInfo GetPreparedStatementInfo(PreparedStatementData &dat
 	return info;
 }
 
+static constexpr std::string_view PREPARED_STATEMENT_HANDLE_PREFIX = "duckdb_prepare_internal_";
+
+bool ClientContext::IsPreparedStatementHandle(const Identifier &name) {
+	return std::string_view(name.GetIdentifierName()).starts_with(PREPARED_STATEMENT_HANDLE_PREFIX);
+}
+
 unique_ptr<PreparedStatement>
 ClientContext::PrepareInternal(ClientContextLock &lock, unique_ptr<SQLStatement> statement,
-                               optional_ptr<const case_insensitive_map_t<LogicalType>> parameter_type_hints) {
+                               optional_ptr<const case_insensitive_map_t<LogicalType>> parameter_type_hints,
+                               optional_ptr<const Identifier> name) {
 	auto statement_query = statement->query;
 	// prepare the statement under a generated name - the returned PreparedStatement only refers to that name
-	auto name = "duckdb_prepare_internal_" + UUID::ToString(UUID::GenerateRandomUUID());
+	Identifier handle(string(PREPARED_STATEMENT_HANDLE_PREFIX) + UUID::ToString(UUID::GenerateRandomUUID()));
 	auto prepare = make_uniq<PrepareStatement>();
-	prepare->name = Identifier(name);
+	prepare->name = handle;
 	prepare->query = statement_query;
 	prepare->stmt_location = statement->stmt_location;
 	prepare->statement = std::move(statement);
@@ -523,12 +530,18 @@ ClientContext::PrepareInternal(ClientContextLock &lock, unique_ptr<SQLStatement>
 	parameters.result_eagerness = ResultEagerness::FORCED;
 	auto result = RunStatementInternal(lock, std::move(prepare), parameters, false);
 	result->ThrowIfError();
-	auto entry = client_data->prepared_statements.find(name);
-	if (entry == client_data->prepared_statements.end()) {
+	auto &statements = client_data->prepared_statements;
+	auto entry = statements.find(handle);
+	if (entry == statements.end()) {
 		throw InternalException("PREPARE succeeded but the prepared statement was not registered");
 	}
-	return make_uniq<PreparedStatement>(shared_from_this(), std::move(name), std::move(statement_query),
-	                                    GetPreparedStatementInfo(*entry->second));
+	auto prepared = entry->second;
+	if (name && !statements.try_emplace(*name, prepared).second) {
+		statements.erase(handle);
+		throw CatalogException::DuplicatePreparedStatement(*name);
+	}
+	return make_uniq<PreparedStatement>(shared_from_this(), handle.GetIdentifierName(), std::move(statement_query),
+	                                    GetPreparedStatementInfo(*prepared));
 }
 
 void ClientContext::RemovePreparedStatement(const string &name) {
@@ -536,9 +549,22 @@ void ClientContext::RemovePreparedStatement(const string &name) {
 	client_data->prepared_statements.erase(name);
 }
 
+void ClientContext::RegisterPreparedStatement(const Identifier &name, unique_ptr<SQLStatement> statement) {
+	auto lock = LockContext();
+	auto prepared = make_shared_ptr<PreparedStatementData>(statement->type);
+	prepared->unbound_statement = std::move(statement);
+	prepared->properties.return_type = StatementReturnType::NOTHING;
+	prepared->properties.always_require_rebind = true;
+	prepared->prepare_time = timestamp_tz_t(Timestamp::GetCurrentTimestamp());
+	if (!client_data->prepared_statements.try_emplace(name, std::move(prepared)).second) {
+		throw CatalogException::DuplicatePreparedStatement(name);
+	}
+}
+
 unique_ptr<PreparedStatement>
 ClientContext::Prepare(unique_ptr<SQLStatement> statement,
-                       optional_ptr<const case_insensitive_map_t<LogicalType>> parameter_type_hints) {
+                       optional_ptr<const case_insensitive_map_t<LogicalType>> parameter_type_hints,
+                       optional_ptr<const Identifier> name) {
 	auto lock = LockContext();
 	// Store the query in case of an error.
 	auto query = statement->query;
@@ -546,7 +572,7 @@ ClientContext::Prepare(unique_ptr<SQLStatement> statement,
 	// Try to prepare.
 	try {
 		InitialCleanup(*lock);
-		return PrepareInternal(*lock, std::move(statement), parameter_type_hints);
+		return PrepareInternal(*lock, std::move(statement), parameter_type_hints, name);
 	} catch (std::exception &ex) {
 		return ErrorResult<PreparedStatement>(ErrorData(ex), query);
 	}

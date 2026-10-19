@@ -1,6 +1,7 @@
 #include "duckdb/parser/statement/prepare_statement.hpp"
 
 #include "duckdb/common/sql_identifier.hpp"
+#include "duckdb/common/to_string.hpp"
 
 namespace duckdb {
 
@@ -21,6 +22,15 @@ string PrepareStatement::ToString() const {
 	result += "PREPARE";
 	result += " ";
 	result += SQLIdentifier(name);
+	for (idx_t i = 1;; i++) {
+		auto hint = parameter_type_hints.find(to_string(i));
+		if (hint == parameter_type_hints.end()) {
+			result += i == 1 ? "" : ")";
+			break;
+		}
+		result += i == 1 ? "(" : ", ";
+		result += hint->second.ToString();
+	}
 	result += " ";
 	result += "AS";
 	result += " ";

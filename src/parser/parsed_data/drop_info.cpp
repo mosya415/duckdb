@@ -1,4 +1,5 @@
 #include "duckdb/parser/parsed_data/drop_info.hpp"
+#include "duckdb/common/enum_util.hpp"
 #include "duckdb/parser/parsed_data/extra_drop_info.hpp"
 #include "duckdb/parser/tableref/basetableref.hpp"
 
@@ -22,8 +23,15 @@ unique_ptr<DropInfo> DropInfo::Copy() const {
 string DropInfo::ToString() const {
 	string result = "";
 	if (type == CatalogType::PREPARED_STATEMENT) {
-		result += "DEALLOCATE PREPARE ";
-		result += SQLIdentifier(GetQualifiedName().Name());
+		if (extra_drop_info) {
+			result += "DISCARD ";
+			result += EnumUtil::ToString(extra_drop_info->Cast<ExtraDropDiscardInfo>().target);
+		} else if (GetQualifiedName().Name().empty()) {
+			result += "DEALLOCATE ALL";
+		} else {
+			result += "DEALLOCATE PREPARE ";
+			result += SQLIdentifier(GetQualifiedName().Name());
+		}
 	} else {
 		result += "DROP";
 		result += " " + ParseInfo::TypeToString(type);

@@ -39,16 +39,17 @@ public:
 		return true;
 	}
 
+	static void ResetAll(ExecutionContext &context, SetScope scope);
+
 public:
 	const String name;
 	const SetScope scope;
 
 private:
-	void ResetOption(ExecutionContext &context, DBConfig &config, const ConfigurationOption &option,
-	                 SetScope effective_scope) const;
-	void ResetExtensionVariable(ExecutionContext &context, DBConfig &config, const Identifier &name,
-	                            ExtensionOption &extension_option, SetScope effective_scope) const;
-	void ResetAll(ExecutionContext &context, DBConfig &config) const;
+	static void ResetOption(ExecutionContext &context, DBConfig &config, const ConfigurationOption &option,
+	                        SetScope effective_scope);
+	static void ResetExtensionVariable(ExecutionContext &context, DBConfig &config, const Identifier &name,
+	                                   ExtensionOption &extension_option, SetScope effective_scope);
 };
 
 } // namespace duckdb

@@ -25,6 +25,16 @@ PEGTransformerFactory::TransformPrepareStatement(PEGTransformer &transformer, co
 	if (!IsPrepareableStatement(statement->type)) {
 		throw ParserException("%s is not a preparable statement", EnumUtil::ToString(statement->type));
 	}
+	if (type_list) {
+		const bool named = transformer.last_param_type == PreparedParamType::NAMED;
+		for (idx_t i = 0; i < type_list->size(); i++) {
+			auto number = to_string(i + 1);
+			if (!named) {
+				statement->named_param_map.emplace(Identifier(number), i + 1);
+			}
+			result->parameter_type_hints.emplace(std::move(number), (*type_list)[i]);
+		}
+	}
 	result->statement = std::move(statement);
 	transformer.ClearParameters();
 	return std::move(result);
@@ -32,7 +42,7 @@ PEGTransformerFactory::TransformPrepareStatement(PEGTransformer &transformer, co
 
 vector<LogicalType> PEGTransformerFactory::TransformTypeList(PEGTransformer &transformer,
                                                              const vector<LogicalType> &type) {
-	throw NotImplementedException("TypeList for prepared statement has not been implemented.");
+	return type;
 }
 
 } // namespace duckdb

@@ -260,9 +260,12 @@ public:
 	//! Directly prepare a SQL statement
 	DUCKDB_API unique_ptr<PreparedStatement>
 	Prepare(unique_ptr<SQLStatement> statement,
-	        optional_ptr<const case_insensitive_map_t<LogicalType>> parameter_type_hints = nullptr);
+	        optional_ptr<const case_insensitive_map_t<LogicalType>> parameter_type_hints = nullptr,
+	        optional_ptr<const Identifier> name = nullptr);
 	//! Deallocate the prepared statement with the given name - does nothing if it does not exist
 	DUCKDB_API void RemovePreparedStatement(const string &name);
+	DUCKDB_API void RegisterPreparedStatement(const Identifier &name, unique_ptr<SQLStatement> statement);
+	DUCKDB_API static bool IsPreparedStatementHandle(const Identifier &name);
 	//! Bind a statement and return its signature, without building a PreparedStatement, optimizing, or
 	//! executing. Read-only: binding touches no in-flight query state, so a live result survives. Throws on error.
 	DUCKDB_API StatementSignature BindStatement(unique_ptr<SQLStatement> statement);
@@ -389,7 +392,8 @@ private:
 	                                             const QueryParameters &parameters, bool verify = true);
 	unique_ptr<PreparedStatement>
 	PrepareInternal(ClientContextLock &lock, unique_ptr<SQLStatement> statement,
-	                optional_ptr<const case_insensitive_map_t<LogicalType>> parameter_type_hints = nullptr);
+	                optional_ptr<const case_insensitive_map_t<LogicalType>> parameter_type_hints = nullptr,
+	                optional_ptr<const Identifier> name = nullptr);
 	void LogQueryInternal(ClientContextLock &lock, std::string_view query);
 
 	unique_ptr<ClientContextLock> LockContext();

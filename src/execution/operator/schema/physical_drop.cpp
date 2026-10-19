@@ -1,4 +1,6 @@
 #include "duckdb/execution/operator/schema/physical_drop.hpp"
+#include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
+#include "duckdb/execution/operator/helper/physical_reset.hpp"
 #include "duckdb/main/client_data.hpp"
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/main/database.hpp"
@@ -10,6 +12,67 @@
 
 namespace duckdb {
 
+static void DropTemporaryObjects(ClientContext &context) {
+	auto &catalog = Catalog::GetCatalog(context, TEMP_CATALOG);
+	vector<unique_ptr<DropInfo>> drops;
+	catalog.ScanSchemas(context, [&](SchemaCatalogEntry &schema) {
+		for (auto type : {CatalogType::TABLE_ENTRY, CatalogType::SEQUENCE_ENTRY, CatalogType::MACRO_ENTRY,
+		                  CatalogType::TABLE_MACRO_ENTRY, CatalogType::TYPE_ENTRY}) {
+			schema.Scan(context, type, [&](CatalogEntry &entry) {
+				if (entry.internal) {
+					return;
+				}
+				auto drop = make_uniq<DropInfo>();
+				drop->type = entry.type;
+				drop->SetQualifiedName(
+				    QualifiedName::FromCatalogSchema(catalog.GetName(), entry.ParentSchemaPath(), entry.name));
+				drop->cascade = true;
+				drop->if_not_found = OnEntryNotFound::RETURN_NULL;
+				drops.push_back(std::move(drop));
+			});
+		}
+	});
+	for (auto &drop : drops) {
+		catalog.DropEntry(context, *drop);
+	}
+}
+
+static void ResetSequences(ClientContext &context) {
+	auto &session = SequenceSession::Get(context);
+	lock_guard<mutex> guard(session.lock);
+	session.values.clear();
+}
+
+static void DeallocateAll(ClientContext &context) {
+	auto &statements = ClientData::Get(context).prepared_statements;
+	for (auto it = statements.begin(); it != statements.end();) {
+		if (ClientContext::IsPreparedStatementHandle(it->first)) {
+			++it;
+		} else {
+			statements.erase(it++);
+		}
+	}
+}
+
+static void Discard(ExecutionContext &context, DiscardTarget target) {
+	switch (target) {
+	case DiscardTarget::ALL:
+		DeallocateAll(context.client);
+		PhysicalReset::ResetAll(context, SetScope::AUTOMATIC);
+		DropTemporaryObjects(context.client);
+		ResetSequences(context.client);
+		break;
+	case DiscardTarget::PLANS:
+		break;
+	case DiscardTarget::SEQUENCES:
+		ResetSequences(context.client);
+		break;
+	case DiscardTarget::TEMP:
+		DropTemporaryObjects(context.client);
+		break;
+	}
+}
+
 //===--------------------------------------------------------------------===//
 // Source
 //===--------------------------------------------------------------------===//
@@ -17,21 +80,14 @@ SourceResultType PhysicalDrop::GetDataInternal(ExecutionContext &context, DataCh
                                                OperatorSourceInput &input) const {
 	switch (info->type) {
 	case CatalogType::PREPARED_STATEMENT: {
-		// Empty name == DEALLOCATE ALL / DISCARD <target>: always succeed.
-		// Named DEALLOCATE <name>: honour if_not_found so we match PG, which
-		// errors with "prepared statement \"X\" does not exist" rather than
-		// silently no-op'ing.
-		auto &statements = ClientData::Get(context.client).prepared_statements;
 		auto &name = info->GetQualifiedName().Name();
-		if (name.empty()) {
-			statements.clear();
-		} else {
-			auto stmt_iter = statements.find(name);
-			if (stmt_iter != statements.end()) {
-				statements.erase(stmt_iter);
-			} else if (info->if_not_found == OnEntryNotFound::THROW_EXCEPTION) {
-				throw CatalogException("prepared statement %s does not exist", name);
-			}
+		if (info->extra_drop_info) {
+			Discard(context, info->extra_drop_info->Cast<ExtraDropDiscardInfo>().target);
+		} else if (name.empty()) {
+			DeallocateAll(context.client);
+		} else if (!ClientData::Get(context.client).prepared_statements.erase(name) &&
+		           info->if_not_found == OnEntryNotFound::THROW_EXCEPTION) {
+			throw CatalogException::MissingPreparedStatement(name);
 		}
 		break;
 	}

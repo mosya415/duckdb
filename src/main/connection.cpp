@@ -147,8 +147,9 @@ Connection::Prepare(std::string_view query,
 
 unique_ptr<PreparedStatement>
 Connection::Prepare(unique_ptr<SQLStatement> statement,
-                    optional_ptr<const case_insensitive_map_t<LogicalType>> parameter_type_hints) {
-	return context->Prepare(std::move(statement), parameter_type_hints);
+                    optional_ptr<const case_insensitive_map_t<LogicalType>> parameter_type_hints,
+                    optional_ptr<const Identifier> name) {
+	return context->Prepare(std::move(statement), parameter_type_hints, name);
 }
 
 unique_ptr<QueryResult> Connection::QueryParamsRecursive(std::string_view query, vector<Value> &values) {

@@ -4,6 +4,7 @@
 #include "duckdb/catalog/catalog_search_path.hpp"
 #include "duckdb/catalog/catalog_entry/sequence_catalog_entry.hpp"
 #include "duckdb/common/constants.hpp"
+#include "duckdb/common/enums/identifier_case_mode.hpp"
 #include "duckdb/common/opener_file_system.hpp"
 #include "duckdb/common/random_engine.hpp"
 #include "duckdb/common/serializer/buffered_file_writer.hpp"
@@ -14,6 +15,7 @@
 #include "duckdb/main/database.hpp"
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/main/query_profiler.hpp"
+#include "duckdb/main/settings.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
 #include "duckdb/storage/buffer/block_handle.hpp"
 
@@ -236,6 +238,10 @@ ClientData::ClientData(ClientContext &context) : catalog_search_path(make_uniq<C
 	auto &db = DatabaseInstance::GetDatabase(context);
 
 	default_database = DatabaseManager::Get(db).GetDefaultDatabase();
+	if (Settings::Get<PreserveIdentifierCaseSetting>(context) != IdentifierCaseMode::PRESERVE_CASE) {
+		prepared_statements = identifier_map_t<shared_ptr<PreparedStatementData>>(0, IdentifierHashFunction(true),
+		                                                                          IdentifierEquality(true));
+	}
 	profiler = make_shared_ptr<QueryProfiler>(context);
 	temporary_objects = make_shared_ptr<AttachedDatabase>(db, AttachedDatabaseType::TEMP_DATABASE);
 	temporary_objects->oid = DatabaseManager::Get(db).NextOid();

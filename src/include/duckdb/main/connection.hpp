@@ -125,7 +125,8 @@ public:
 	//! Prepare the specified statement, returning a prepared statement object
 	DUCKDB_API unique_ptr<PreparedStatement>
 	Prepare(unique_ptr<SQLStatement> statement,
-	        optional_ptr<const case_insensitive_map_t<LogicalType>> parameter_type_hints = nullptr);
+	        optional_ptr<const case_insensitive_map_t<LogicalType>> parameter_type_hints = nullptr,
+	        optional_ptr<const Identifier> name = nullptr);
 
 	//! Get the table info of a specific table, or nullptr if it cannot be found.
 	DUCKDB_API unique_ptr<TableDescription> TableInfo(const Identifier &database_name, const Identifier &schema_name,
