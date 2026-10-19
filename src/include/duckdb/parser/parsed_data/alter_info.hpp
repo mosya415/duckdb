@@ -51,7 +51,7 @@ struct AlterEntryData {
 	}
 
 	QualifiedName qualified_name;
-	OnEntryNotFound if_not_found;
+	OnEntryNotFound if_not_found = OnEntryNotFound::THROW_EXCEPTION;
 };
 
 struct AlterInfo : public ParseInfo {

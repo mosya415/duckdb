@@ -11,12 +11,9 @@ namespace duckdb {
 //===--------------------------------------------------------------------===//
 // ChangeOwnershipInfo
 //===--------------------------------------------------------------------===//
-ChangeOwnershipInfo::ChangeOwnershipInfo(CatalogType entry_catalog_type, Identifier entry_catalog_p,
-                                         Identifier entry_schema_p, Identifier entry_name_p, Identifier owner_schema_p,
-                                         Identifier owner_name_p, OnEntryNotFound if_not_found)
-    : AlterInfo(AlterType::CHANGE_OWNERSHIP,
-                QualifiedName(std::move(entry_catalog_p), std::move(entry_schema_p), std::move(entry_name_p)),
-                if_not_found),
+ChangeOwnershipInfo::ChangeOwnershipInfo(CatalogType entry_catalog_type, AlterEntryData data, Identifier owner_schema_p,
+                                         Identifier owner_name_p)
+    : AlterInfo(AlterType::CHANGE_OWNERSHIP, std::move(data.qualified_name), data.if_not_found),
       entry_catalog_type(entry_catalog_type), owner_schema(std::move(owner_schema_p)),
       owner_name(std::move(owner_name_p)) {
 }
@@ -29,9 +26,7 @@ CatalogType ChangeOwnershipInfo::GetCatalogType() const {
 }
 
 unique_ptr<AlterInfo> ChangeOwnershipInfo::Copy() const {
-	auto result =
-	    make_uniq<ChangeOwnershipInfo>(entry_catalog_type, GetQualifiedName().Catalog(), GetQualifiedName().Schema(),
-	                                   GetQualifiedName().Name(), owner_schema, owner_name, if_not_found);
+	auto result = make_uniq<ChangeOwnershipInfo>(entry_catalog_type, GetAlterEntryData(), owner_schema, owner_name);
 	result->owner_path = owner_path;
 	return std::move(result);
 }

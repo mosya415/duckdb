@@ -27,9 +27,8 @@ enum class AlterForeignKeyType : uint8_t { AFT_ADD = 0, AFT_DELETE = 1 };
 // Change Ownership
 //===--------------------------------------------------------------------===//
 struct ChangeOwnershipInfo : public AlterInfo {
-	ChangeOwnershipInfo(CatalogType entry_catalog_type, Identifier entry_catalog, Identifier entry_schema,
-	                    Identifier entry_name, Identifier owner_schema, Identifier owner_name,
-	                    OnEntryNotFound if_not_found);
+	ChangeOwnershipInfo(CatalogType entry_catalog_type, AlterEntryData data, Identifier owner_schema,
+	                    Identifier owner_name);
 
 	// Catalog type refers to the entry type, since this struct is usually built from an
 	// ALTER <TYPE> <schema>.<name> OWNED BY <owner_schema>.<owner_name> statement
