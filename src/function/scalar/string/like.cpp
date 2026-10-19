@@ -200,7 +200,7 @@ bool TemplatedLikeOperator(const char *sdata, idx_t slen, const char *pdata, idx
 				if (pidx + 1 == plen) {
 					throw SyntaxException("Like pattern must not end with escape character!");
 				}
-				if (pdata[pidx + 1] == schar) {
+				if (READER::Operation(pdata, pidx + 1) == schar) {
 					pidx += 2;
 					sidx++;
 					continue;
@@ -407,6 +407,34 @@ char GetEscapeChar(string_t escape) {
 	return escape.GetSize() == 0 ? '\0' : *escape.GetData();
 }
 
+bool CaseCanChangeEscapes(const char *data, idx_t size, char escape) {
+	auto letter = static_cast<uint8_t>(StringUtil::CharacterToLower(escape));
+	bool found = false;
+	for (idx_t i = 0; i < size; i++) {
+		auto c = static_cast<uint8_t>(data[i]);
+		found |= (c | 0x20) == letter || c >= 0x80;
+	}
+	return found;
+}
+
+idx_t WithBackslashEscape(const char *data, idx_t size, char escape, char *result) {
+	idx_t length = 0;
+	for (idx_t i = 0; i < size; i++) {
+		if (data[i] == escape) {
+			result[length++] = '\\';
+			if (++i < size) {
+				result[length++] = data[i];
+			}
+		} else if (data[i] == '\\') {
+			result[length++] = '\\';
+			result[length++] = '\\';
+		} else {
+			result[length++] = data[i];
+		}
+	}
+	return length;
+}
+
 struct LikeEscapeOperator {
 	template <class TA, class TB, class TC>
 	static inline bool Operation(TA str, TB pattern, TC escape) {
@@ -498,11 +526,20 @@ struct ILikeMatcher {
 struct ILikeLocalState : public FunctionLocalState {
 	ILikePattern LowerPattern(string_t input, string_t escape) {
 		char escape_char = GetEscapeChar(escape);
-		return {pattern.Lower(input), escape.GetSize() != 0, escape_char};
+		bool has_escape = escape.GetSize() != 0;
+		if (has_escape && StringUtil::CharacterIsAlpha(escape_char) &&
+		    CaseCanChangeEscapes(input.GetData(), input.GetSize(), escape_char)) {
+			auto result = escaped.Reserve(2 * input.GetSize());
+			auto size = WithBackslashEscape(input.GetData(), input.GetSize(), escape_char, result);
+			input = string_t(result, UnsafeNumericCast<uint32_t>(size));
+			escape_char = '\\';
+		}
+		return {pattern.Lower(input), has_escape, escape_char};
 	}
 
 	// reusable scratch buffer for lowercasing each string value (grown on demand)
 	ILikeBuffer str;
+	ILikeBuffer escaped;
 	ILikeBuffer pattern;
 	string constant_pattern;
 	string constant_escape;
