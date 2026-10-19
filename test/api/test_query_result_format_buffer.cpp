@@ -100,6 +100,11 @@ TEST_CASE("A producer parks while several sliced units are still pending in its 
 		auto handle = SubmitFormatted(con, "SELECT i FROM range_st(20000) t(i)", 300);
 		DrainWatchdog watchdog(con);
 		QueryResultStream<TestFormat> stream(std::move(handle));
+		Deadline deadline;
+		while (!stream.GetBufferedData().HasBlockedSink()) {
+			REQUIRE(!IsTerminal(stream.ExecuteTask()));
+			REQUIRE(!deadline.Passed());
+		}
 		auto report = Drain(stream);
 		RequireAscending(report.rows, 20000);
 		REQUIRE(report.unit_count >= 20000 / 300);
