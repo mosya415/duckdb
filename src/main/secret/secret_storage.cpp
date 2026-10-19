@@ -93,7 +93,7 @@ SecretMatch TransactionSecretStorage::LookupSecret(const string &path, const str
 unique_ptr<SecretEntry> TransactionSecretStorage::GetSecretByName(const string &name,
                                                                   optional_ptr<CatalogTransaction> transaction) {
 	lock_guard<mutex> guard(lock);
-	auto entry = secrets.find(Identifier(name));
+	auto entry = secrets.find(name);
 	if (entry == secrets.end()) {
 		return nullptr;
 	}
@@ -315,7 +315,7 @@ void LocalFileSecretStorage::WriteSecret(const BaseSecret &secret, OnCreateConfl
 void LocalFileSecretStorage::RemoveSecret(const string &secret, OnEntryNotFound on_entry_not_found) {
 	auto &fs = FileSystem::GetLocal(db);
 	string file = fs.JoinPath(secret_path, secret + ".duckdb_secret");
-	persistent_secrets.erase(Identifier(secret));
+	persistent_secrets.erase(secret);
 	try {
 		fs.RemoveFile(file);
 	} catch (std::exception &ex) {
@@ -459,7 +459,7 @@ unique_ptr<SecretEntry> ConnectionSecretStorage::GetSecretByName(const string &n
 		return nullptr;
 	}
 	lock_guard<mutex> guard(state->lock);
-	auto entry = state->secrets.find(Identifier(name));
+	auto entry = state->secrets.find(name);
 	if (entry == state->secrets.end()) {
 		return nullptr;
 	}

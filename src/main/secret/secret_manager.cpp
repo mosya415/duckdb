@@ -84,7 +84,7 @@ void SecretManager::LoadSecretStorageInternal(unique_ptr<SecretStorage> storage)
 	if (StringUtil::CIEquals(storage->GetName(), TRANSACTION_STORAGE_NAME)) {
 		throw InvalidConfigurationException("Secret Storage name '%s' is reserved!", storage->GetName());
 	}
-	if (secret_storages.find(Identifier(storage->GetName())) != secret_storages.end()) {
+	if (secret_storages.find(storage->GetName()) != secret_storages.end()) {
 		throw InvalidConfigurationException("Secret Storage with name '%s' already registered!", storage->GetName());
 	}
 
@@ -308,7 +308,7 @@ BoundStatement SecretManager::BindCreateSecret(CatalogTransaction transaction, C
 
 	// We cast the passed parameters
 	for (const auto &param : info.options) {
-		auto matched_param = function->named_parameters.find(Identifier(param.first));
+		auto matched_param = function->named_parameters.find(param.first);
 		if (matched_param == function->named_parameters.end()) {
 			throw BinderException("Unknown parameter %s for secret type %s with %sprovider %s", Identifier(param.first),
 			                      type, default_string, provider);
@@ -521,7 +521,7 @@ SecretType SecretManager::LookupTypeInternal(const Identifier &type) {
 }
 
 void SecretManager::RegisterSecretFunctionInternal(CreateSecretFunction function, OnCreateConflict on_conflict) {
-	auto lookup = secret_functions.find(Identifier(function.secret_type));
+	auto lookup = secret_functions.find(function.secret_type);
 	if (lookup != secret_functions.end()) {
 		lookup->second.AddFunction(function, on_conflict);
 		return;
@@ -755,7 +755,7 @@ DefaultSecretGenerator::DefaultSecretGenerator(Catalog &catalog, SecretManager &
 
 unique_ptr<CatalogEntry> DefaultSecretGenerator::CreateDefaultEntryInternal(const Identifier &entry_name) {
 	lock_guard<mutex> guard(lock);
-	auto secret_lu = persistent_secrets.find(Identifier(entry_name));
+	auto secret_lu = persistent_secrets.find(entry_name);
 	if (secret_lu == persistent_secrets.end()) {
 		return nullptr;
 	}

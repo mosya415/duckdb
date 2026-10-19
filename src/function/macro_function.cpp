@@ -359,7 +359,7 @@ MacroFunction::GetPositionalParametersForSerialization(Serializer &serializer) c
 	// Serializing targeting an older version - delete all named parameters from the list of positional parameters
 	for (auto &param : parameters) {
 		auto &colref = param->Cast<ColumnRefExpression>();
-		if (default_parameters.find(Identifier(colref.GetName())) != default_parameters.end()) {
+		if (default_parameters.find(colref.GetName()) != default_parameters.end()) {
 			// This is a default parameter - do not serialize
 			continue;
 		}

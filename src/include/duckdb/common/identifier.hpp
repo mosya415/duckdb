@@ -12,10 +12,12 @@
 #include "duckdb/common/unordered_map.hpp"
 #include "duckdb/common/unordered_set.hpp"
 #include "duckdb/common/string.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/common/map.hpp"
 #include "duckdb/common/vector.hpp"
 
-#include <absl/strings/match.h>
+#include <absl/hash/hash.h>
+#include <concepts>
 #include <iosfwd>
 #include <string_view>
 
@@ -69,10 +71,6 @@ public:
 		return value;
 	}
 
-	bool operator==(std::string_view other) const {
-		return absl::EqualsIgnoreCase(value, other);
-	}
-
 	bool empty() const { // NOLINT: match std::string interface
 		return value.empty();
 	}
@@ -87,13 +85,32 @@ public:
 	}
 
 	//! Whether the identifier starts with the given prefix (case-insensitive)
-	DUCKDB_API bool StartsWith(const string &prefix) const;
+	bool StartsWith(std::string_view prefix) const {
+		return StringUtil::CIStartsWith(value, prefix);
+	}
 
 	//! Whether the identifier ends with the given suffix (case-insensitive)
-	DUCKDB_API bool EndsWith(const string &suffix) const;
+	bool EndsWith(std::string_view suffix) const {
+		return StringUtil::CIEndsWith(value, suffix);
+	}
 
 	//! Case-insensitive hash of the identifier
-	DUCKDB_API hash_t Hash() const;
+	hash_t Hash() const {
+		return StringUtil::CIHash(value);
+	}
+
+	//! Equality (case-insensitive)
+	friend bool operator==(const Identifier &a, const Identifier &b) {
+		return StringUtil::CIEquals(a.value, b.value);
+	}
+	friend bool operator==(const Identifier &a, const std::convertible_to<std::string_view> auto &b) {
+		return StringUtil::CIEquals(a.value, b);
+	}
+
+	//! Ordering (case-insensitive)
+	friend bool operator<(const Identifier &a, const Identifier &b) {
+		return StringUtil::CILessThan(a.value, b.value);
+	}
 
 private:
 	string value;
@@ -132,32 +149,6 @@ private:
 //! Generate an internal name: the given prefix followed by a random UUID
 Identifier GenerateInternalName(const char *prefix);
 
-//! Equality (case-insensitive)
-DUCKDB_API bool operator==(const Identifier &a, const Identifier &b);
-DUCKDB_API bool operator==(const Identifier &a, const string &b);
-DUCKDB_API bool operator==(const string &a, const Identifier &b);
-DUCKDB_API bool operator==(const Identifier &a, const char *b);
-DUCKDB_API bool operator==(const char *a, const Identifier &b);
-
-inline bool operator!=(const Identifier &a, const Identifier &b) {
-	return !(a == b);
-}
-inline bool operator!=(const Identifier &a, const string &b) {
-	return !(a == b);
-}
-inline bool operator!=(const string &a, const Identifier &b) {
-	return !(a == b);
-}
-inline bool operator!=(const Identifier &a, const char *b) {
-	return !(a == b);
-}
-inline bool operator!=(const char *a, const Identifier &b) {
-	return !(a == b);
-}
-
-//! Ordering (case-insensitive)
-DUCKDB_API bool operator<(const Identifier &a, const Identifier &b);
-
 //! Streaming an identifier writes its raw name (without quotes) - this mirrors writing the underlying string
 DUCKDB_API std::ostream &operator<<(std::ostream &os, const Identifier &id);
 
@@ -190,41 +181,53 @@ inline string &operator+=(string &a, const Identifier &b) {
 	return a;
 }
 
+inline std::string_view IdentifierView(const Identifier &id) {
+	return id.GetIdentifierName();
+}
+inline std::string_view IdentifierView(const std::convertible_to<std::string_view> auto &name) {
+	return name;
+}
+
 struct IdentifierHashFunction {
+	using is_transparent = void;
+
 	IdentifierHashFunction() = default;
 	explicit IdentifierHashFunction(bool case_sensitive_p) : case_sensitive(case_sensitive_p) {
 	}
 
-	DUCKDB_API uint64_t operator()(const Identifier &id) const;
+	uint64_t operator()(const auto &id) const {
+		const auto name = IdentifierView(id);
+		return case_sensitive ? absl::Hash<std::string_view>()(name) : StringUtil::CIHash(name);
+	}
 
 	bool case_sensitive = false;
 };
 
 struct IdentifierEquality {
+	using is_transparent = void;
+
 	IdentifierEquality() = default;
 	explicit IdentifierEquality(bool case_sensitive_p) : case_sensitive(case_sensitive_p) {
 	}
 
-	bool operator()(const Identifier &a, const Identifier &b) const {
-		if (case_sensitive) {
-			return a.GetIdentifierName() == b.GetIdentifierName();
-		}
-		return a == b;
+	bool operator()(const auto &a, const auto &b) const {
+		return case_sensitive ? IdentifierView(a) == IdentifierView(b)
+		                      : StringUtil::CIEquals(IdentifierView(a), IdentifierView(b));
 	}
 
 	bool case_sensitive = false;
 };
 
 struct IdentifierCompare {
+	using is_transparent = void;
+
 	IdentifierCompare() = default;
 	explicit IdentifierCompare(bool case_sensitive_p) : case_sensitive(case_sensitive_p) {
 	}
 
-	bool operator()(const Identifier &a, const Identifier &b) const {
-		if (case_sensitive) {
-			return a.GetIdentifierName() < b.GetIdentifierName();
-		}
-		return a < b;
+	bool operator()(const auto &a, const auto &b) const {
+		return case_sensitive ? IdentifierView(a) < IdentifierView(b)
+		                      : StringUtil::CILessThan(IdentifierView(a), IdentifierView(b));
 	}
 
 	bool case_sensitive = false;

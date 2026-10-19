@@ -523,7 +523,7 @@ ClientContext::PrepareInternal(ClientContextLock &lock, unique_ptr<SQLStatement>
 	parameters.result_eagerness = ResultEagerness::FORCED;
 	auto result = RunStatementInternal(lock, std::move(prepare), parameters, false);
 	result->ThrowIfError();
-	auto entry = client_data->prepared_statements.find(Identifier(name));
+	auto entry = client_data->prepared_statements.find(name);
 	if (entry == client_data->prepared_statements.end()) {
 		throw InternalException("PREPARE succeeded but the prepared statement was not registered");
 	}
@@ -533,7 +533,7 @@ ClientContext::PrepareInternal(ClientContextLock &lock, unique_ptr<SQLStatement>
 
 void ClientContext::RemovePreparedStatement(const string &name) {
 	auto lock = LockContext();
-	client_data->prepared_statements.erase(Identifier(name));
+	client_data->prepared_statements.erase(name);
 }
 
 unique_ptr<PreparedStatement>

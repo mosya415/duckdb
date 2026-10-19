@@ -1,6 +1,7 @@
 #include "duckdb/common/string_util.hpp"
 
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/identifier.hpp"
 #include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/common/pair.hpp"
 #include "duckdb/common/stack.hpp"

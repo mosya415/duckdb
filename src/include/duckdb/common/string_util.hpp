@@ -23,6 +23,9 @@
 
 namespace duckdb {
 
+class Identifier;
+struct string_t;
+
 #ifndef DUCKDB_QUOTE_DEFINE
 // Preprocessor trick to allow text to be converted to C-string / string
 // Expected use is:

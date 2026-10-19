@@ -294,7 +294,7 @@ BoundStatement Binder::BindTableFunctionInternal(BoundTableFunction &table_funct
 			for (auto &n : column_name_alias) {
 				ci_return_names.insert(n);
 			}
-			while (ci_return_names.find(Identifier(ordinality_column_name)) != ci_return_names.end()) {
+			while (ci_return_names.find(ordinality_column_name) != ci_return_names.end()) {
 				ordinality_column_name = ordinality_name + to_string(ordinality_name_suffix++);
 			}
 			if (!correlated_columns.empty()) {

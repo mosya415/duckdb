@@ -96,7 +96,7 @@ void ParseGroupNameList(const string &function_name, const Value &list_val, cons
 			throw BinderException("NULL group name in %s", function_name);
 		}
 		auto name = child.ToString();
-		if (name_set.find(Identifier(name)) != name_set.end()) {
+		if (name_set.find(name) != name_set.end()) {
 			throw BinderException("Duplicate group name '%s' in %s", name, function_name);
 		}
 		name_set.insert(Identifier(name));
