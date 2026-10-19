@@ -352,6 +352,28 @@ SerializationException::SerializationException(std::string_view msg) : Exception
 SequenceException::SequenceException(std::string_view msg) : Exception(ExceptionType::SEQUENCE, msg) {
 }
 
+SequenceException::SequenceException(const unordered_map<string, string> &extra_info, std::string_view msg)
+    : Exception(extra_info, ExceptionType::SEQUENCE, msg) {
+}
+
+SequenceException SequenceException::NotYetDefined() {
+	return SequenceException(InitializeExtraInfo("NOT_YET_DEFINED", QueryLocation()),
+	                         "currval: sequence is not yet defined in this session");
+}
+
+SequenceException SequenceException::LimitReached(const Identifier &sequence, bool maximum, int64_t limit) {
+	return SequenceException(InitializeExtraInfo("LIMIT_REACHED", QueryLocation()),
+	                         ConstructMessage("nextval: reached %s value of sequence %s (%lld)",
+	                                          maximum ? "maximum" : "minimum", sequence, limit));
+}
+
+SequenceException SequenceException::OutOfBounds(const Identifier &sequence, int64_t value, int64_t min_value,
+                                                 int64_t max_value) {
+	return SequenceException(InitializeExtraInfo("OUT_OF_BOUNDS", QueryLocation()),
+	                         ConstructMessage("setval: value %lld is out of bounds for sequence %s (%lld..%lld)", value,
+	                                          sequence, min_value, max_value));
+}
+
 InterruptException::InterruptException() : Exception(ExceptionType::INTERRUPT, INTERRUPT_MESSAGE) {
 }
 

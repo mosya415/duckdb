@@ -318,11 +318,17 @@ public:
 class SequenceException : public Exception {
 public:
 	DUCKDB_API explicit SequenceException(std::string_view msg);
+	DUCKDB_API SequenceException(const unordered_map<string, string> &extra_info, std::string_view msg);
 
 	template <typename... ARGS>
 	explicit SequenceException(std::string_view msg, ARGS &&...params)
 	    : SequenceException(ConstructMessage(msg, std::forward<ARGS>(params)...)) {
 	}
+
+	DUCKDB_API static SequenceException NotYetDefined();
+	DUCKDB_API static SequenceException LimitReached(const Identifier &sequence, bool maximum, int64_t limit);
+	DUCKDB_API static SequenceException OutOfBounds(const Identifier &sequence, int64_t value, int64_t min_value,
+	                                                int64_t max_value);
 };
 
 class InterruptException : public Exception {

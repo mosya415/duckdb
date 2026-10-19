@@ -337,9 +337,9 @@ void SequenceCatalogEntry::FetchLocked(SequenceSessionValue &cached, idx_t neede
 		taken = reserved.usage_count - data.usage_count;
 		if (taken == 0) {
 			if (data.increment < 0) {
-				throw SequenceException("nextval: reached minimum value of sequence %s (%lld)", name, data.min_value);
+				throw SequenceException::LimitReached(name, false, data.min_value);
 			}
-			throw SequenceException("nextval: reached maximum value of sequence %s (%lld)", name, data.max_value);
+			throw SequenceException::LimitReached(name, true, data.max_value);
 		}
 		data.counter = reserved.counter;
 		data.usage_count = reserved.usage_count;
@@ -375,14 +375,14 @@ int64_t SequenceCatalogEntry::CurrentValue(SequenceSession &session) {
 	if (catalog.Compatibility() != SqlCompatibility::POSTGRES) {
 		lock_guard<mutex> seqlock(state->lock);
 		if (!state->data.last_value) {
-			throw SequenceException("currval: sequence is not yet defined in this session");
+			throw SequenceException::NotYetDefined();
 		}
 		return state->data.last_value.value();
 	}
 	lock_guard<mutex> guard(session.lock);
 	auto entry = session.values.find(oid);
 	if (entry == session.values.end() || !entry->second.last) {
-		throw SequenceException("currval: sequence is not yet defined in this session");
+		throw SequenceException::NotYetDefined();
 	}
 	return entry->second.last.value();
 }
@@ -460,8 +460,7 @@ int64_t SequenceCatalogEntry::SetValue(DuckTransaction &transaction, int64_t val
 	ThrowIfSuperseded();
 	auto &data = state->data;
 	if (value < data.min_value || value > data.max_value) {
-		throw SequenceException("setval: value %lld is out of bounds for sequence %s (%lld..%lld)", value, name,
-		                        data.min_value, data.max_value);
+		throw SequenceException::OutOfBounds(name, value, data.min_value, data.max_value);
 	}
 	if (is_called) {
 		const bool overflow = !TryAddOperator::Operation(value, data.increment, data.counter);
@@ -531,10 +530,10 @@ int64_t SequenceCatalogEntry::NextValues(DuckTransaction &transaction, idx_t cou
 			}
 		} else {
 			if (result < data.min_value || (overflow && data.increment < 0)) {
-				throw SequenceException("nextval: reached minimum value of sequence %s (%lld)", name, data.min_value);
+				throw SequenceException::LimitReached(name, false, data.min_value);
 			}
 			if (result > data.max_value || overflow) {
-				throw SequenceException("nextval: reached maximum value of sequence %s (%lld)", name, data.max_value);
+				throw SequenceException::LimitReached(name, true, data.max_value);
 			}
 		}
 	}
