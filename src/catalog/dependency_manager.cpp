@@ -1488,6 +1488,20 @@ catalog_entry_vector_t DependencyManager::OwnedEntries(CatalogTransaction transa
 	return result;
 }
 
+optional_ptr<CatalogEntry> DependencyManager::OwnerOf(CatalogTransaction transaction, CatalogEntry &entry) {
+	optional_ptr<CatalogEntry> owner;
+	if (IsSystemEntry(entry)) {
+		return owner;
+	}
+	lock_guard<mutex> write_lock(catalog.GetWriteLock());
+	ScanDependents(transaction, GetLookupProperties(transaction, entry), [&](DependencyEntry &dep) {
+		if (dep.Dependent().flags.IsOwnedBy()) {
+			owner = LookupEntry(transaction, dep);
+		}
+	});
+	return owner;
+}
+
 void DependencyManager::AddOwnership(CatalogTransaction transaction, CatalogEntry &owner, CatalogEntry &entry) {
 	if (IsSystemEntry(entry) || IsSystemEntry(owner)) {
 		return;

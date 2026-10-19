@@ -100,6 +100,7 @@ public:
 	void AddOwnership(CatalogTransaction transaction, CatalogEntry &owner, CatalogEntry &entry);
 	void RemoveOwnership(CatalogTransaction transaction, CatalogEntry &entry);
 	catalog_entry_vector_t OwnedEntries(CatalogTransaction transaction, CatalogEntry &owner);
+	optional_ptr<CatalogEntry> OwnerOf(CatalogTransaction transaction, CatalogEntry &entry);
 
 	//! Get the order of entries needed by EXPORT, the objects with no dependencies are exported first
 	void ReorderEntries(catalog_entry_vector_t &entries);
