@@ -283,6 +283,7 @@ struct AddColumnConstraints {
 	bool add_not_null = false;
 	bool add_unique = false;
 	bool add_primary_key = false;
+	bool explicit_null = false;
 };
 
 struct AddColumnInfo : public AlterTableInfo {

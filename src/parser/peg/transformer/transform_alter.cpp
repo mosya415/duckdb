@@ -47,6 +47,11 @@ unique_ptr<SQLStatement> PEGTransformerFactory::TransformAlterStatement(PEGTrans
 	auto &add_column = alter_table.Cast<AddColumnInfo>();
 	auto &column_entry = add_column.new_column;
 	const auto follow_ups = add_column.add_column_constraints;
+	if (follow_ups.explicit_null && (follow_ups.add_not_null || follow_ups.add_primary_key)) {
+		throw ParserException("conflicting NULL/NOT NULL declarations for column \"%s\" of table \"%s\"",
+		                      column_entry.GetName().GetIdentifierName(),
+		                      add_column.GetQualifiedName().Name().GetIdentifierName());
+	}
 	const bool materialize_default =
 	    column_entry.HasDefaultValue() && !IsSimpleDefaultValue(column_entry.DefaultValue());
 	if (!follow_ups.add_not_null && !follow_ups.add_unique && !follow_ups.add_primary_key && !materialize_default) {
@@ -466,6 +471,8 @@ AddColumnEntry PEGTransformerFactory::TransformAddColumnEntry(
 				new_column.default_value = std::move(constraint.expression);
 			} else if (constraint_type == ConstraintType::NOT_NULL) {
 				new_column.add_column_constraints.add_not_null = true;
+			} else if (constraint.constraint_name == "NotNullConstraint") {
+				new_column.add_column_constraints.explicit_null = true;
 			} else if (constraint_type == ConstraintType::UNIQUE &&
 			           constraint.constraint_type_info.check_mode == ConstraintCheckMode::DEFAULT) {
 				if (constraint.constraint_type_info.is_primary_key) {
