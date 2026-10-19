@@ -543,11 +543,14 @@ struct ILikeBuffer {
 };
 
 struct ILikePattern {
+	template <class READER = StandardCharacterReader>
 	bool Match(string_t &str) {
 		if (!has_escape) {
-			return LikeOperatorFunction(str, pattern);
+			return TemplatedLikeOperator<'%', '_', false, READER>(str.GetData(), str.GetSize(), pattern.GetData(),
+			                                                      pattern.GetSize(), '\0');
 		}
-		return LikeOperatorFunction(str, pattern, escape);
+		return TemplatedLikeOperator<'%', '_', true, READER>(str.GetData(), str.GetSize(), pattern.GetData(),
+		                                                     pattern.GetSize(), escape);
 	}
 
 	string_t pattern;
@@ -571,11 +574,16 @@ struct ILikeMatcher {
 		    LikeMatcher::CreateLikeMatcher(string(lowered.pattern.GetData(), size), lowered.has_escape, lowered.escape);
 	}
 
-	bool Match(string_t &str) {
-		if (matcher) {
-			return matcher->Match(str);
+	template <bool KNOWN_ASCII>
+	bool Match(string_t &str, ILikeBuffer &lowered_str) {
+		if (KNOWN_ASCII) {
+			return lowered.Match<ASCIILCaseReader>(str);
 		}
-		return lowered.Match(str);
+		auto str_lcase = lowered_str.Lower(str);
+		if (matcher) {
+			return matcher->Match(str_lcase);
+		}
+		return lowered.Match(str_lcase);
 	}
 
 	ILikeBuffer buffer;
@@ -611,27 +619,15 @@ unique_ptr<FunctionLocalState> ILikeInitLocalState(ExpressionState &state, const
 	return make_uniq<ILikeLocalState>();
 }
 
+template <bool KNOWN_ASCII>
 bool ILikeOperatorFunction(ILikeLocalState &lstate, string_t str, string_t pattern, string_t escape) {
-	// lowercase both the str and the pattern
 	auto pat_lcase = lstate.LowerPattern(pattern, escape);
+	if (KNOWN_ASCII) {
+		return pat_lcase.Match<ASCIILCaseReader>(str);
+	}
 	auto str_lcase = lstate.str.Lower(str);
 	return pat_lcase.Match(str_lcase);
 }
-
-struct ILikeOperatorASCII {
-	template <class TA, class TB, class TR>
-	static inline TR Operation(TA str, TB pattern) {
-		return TemplatedLikeOperator<'%', '_', true, ASCIILCaseReader>(str.GetData(), str.GetSize(), pattern.GetData(),
-		                                                               pattern.GetSize(), '\\');
-	}
-};
-
-struct NotILikeOperatorASCII {
-	template <class TA, class TB, class TR>
-	static inline TR Operation(TA str, TB pattern) {
-		return !ILikeOperatorASCII::Operation<TA, TB, TR>(str, pattern);
-	}
-};
 
 struct GlobOperator {
 	template <class TA, class TB, class TR>
@@ -662,7 +658,7 @@ void LikeEscapeFunction(DataChunk &args, ExpressionState &state, Vector &result)
 	    });
 }
 
-template <bool INVERT>
+template <bool INVERT, bool KNOWN_ASCII>
 void ILikeConstantPattern(ILikeLocalState &lstate, const Vector &str_vec, string_t pattern, string_t escape,
                           Vector &result) {
 	if (!lstate.constant_matcher || pattern != lstate.constant_pattern || escape != lstate.constant_escape) {
@@ -674,8 +670,7 @@ void ILikeConstantPattern(ILikeLocalState &lstate, const Vector &str_vec, string
 	}
 	auto &matcher = *lstate.constant_matcher;
 	UnaryExecutor::Execute<string_t, bool>(str_vec, result, [&](string_t str) {
-		auto str_lcase = lstate.str.Lower(str);
-		bool match = matcher.Match(str_lcase);
+		bool match = matcher.Match<KNOWN_ASCII>(str, lstate.str);
 		return INVERT ? !match : match;
 	});
 }
@@ -692,47 +687,43 @@ void ILikeEscapeFunction(DataChunk &args, ExpressionState &state, Vector &result
 	string_t pattern;
 	string_t escape;
 	if (UniformPattern(pattern_vec, pattern) && UniformPattern(escape_vec, escape)) {
-		ILikeConstantPattern<INVERT>(lstate, str_vec, pattern, escape, result);
+		ILikeConstantPattern<INVERT, false>(lstate, str_vec, pattern, escape, result);
 		return;
 	}
 	TernaryExecutor::Execute<string_t, string_t, string_t, bool>(
 	    str_vec, pattern_vec, escape_vec, result, [&](string_t str, string_t pattern, string_t escape) {
-		    bool match = ILikeOperatorFunction(lstate, str, pattern, escape);
+		    bool match = ILikeOperatorFunction<false>(lstate, str, pattern, escape);
 		    return INVERT ? !match : match;
 	    });
 }
 
-template <class ASCII_OP>
-unique_ptr<BaseStatistics> ILikePropagateStats(ClientContext &context, FunctionStatisticsInput &input) {
-	auto &child_stats = input.child_stats;
-	auto &expr = input.expr;
-	D_ASSERT(child_stats.size() >= 1);
-	// can only propagate stats if the children have stats
-	if (!StringStats::CanContainUnicode(child_stats[0])) {
-		expr.FunctionMutable().SetFunctionCallback(ScalarFunction::BinaryFunction<string_t, string_t, bool, ASCII_OP>);
-	}
-	return nullptr;
-}
-
-// Execution function for ILIKE / NOT ILIKE on the (possibly) Unicode path.
-// When the pattern is constant we lowercase it exactly once instead of once per row, and we reuse a single
-// scratch buffer to lowercase each string value instead of heap-allocating per row.
-// (The ASCII-only fast path installed by ILikePropagateStats already avoids allocations, so it is unaffected.)
-template <bool INVERT>
+template <bool INVERT, bool KNOWN_ASCII>
 void ILikeFunction(DataChunk &input, ExpressionState &state, Vector &result) {
 	auto &lstate = ExecuteFunctionState::GetFunctionState(state)->Cast<ILikeLocalState>();
 	auto &pattern_vec = input.data[1];
 	string_t escape("\\", 1);
 	string_t pattern;
 	if (UniformPattern(pattern_vec, pattern)) {
-		ILikeConstantPattern<INVERT>(lstate, input.data[0], pattern, escape, result);
+		ILikeConstantPattern<INVERT, KNOWN_ASCII>(lstate, input.data[0], pattern, escape, result);
 		return;
 	}
 	BinaryExecutor::Execute<string_t, string_t, bool>(
 	    input.data[0], pattern_vec, result, [&](string_t str, string_t pattern) {
-		    bool match = ILikeOperatorFunction(lstate, str, pattern, escape);
+		    bool match = ILikeOperatorFunction<KNOWN_ASCII>(lstate, str, pattern, escape);
 		    return INVERT ? !match : match;
 	    });
+}
+
+template <bool INVERT>
+unique_ptr<BaseStatistics> ILikePropagateStats(ClientContext &context, FunctionStatisticsInput &input) {
+	auto &child_stats = input.child_stats;
+	auto &expr = input.expr;
+	D_ASSERT(child_stats.size() >= 1);
+	// can only propagate stats if the children have stats
+	if (!StringStats::CanContainUnicode(child_stats[0])) {
+		expr.FunctionMutable().SetFunctionCallback(ILikeFunction<INVERT, true>);
+	}
+	return nullptr;
 }
 
 template <bool INVERT>
@@ -772,7 +763,7 @@ ScalarFunction GlobPatternFun::GetFunction() {
 
 ScalarFunction ILikeFun::GetFunction() {
 	ScalarFunction ilike("~~*", {LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::BOOLEAN,
-	                     ILikeFunction<false>, nullptr, ILikePropagateStats<ILikeOperatorASCII>, ILikeInitLocalState);
+	                     ILikeFunction<false, false>, nullptr, ILikePropagateStats<false>, ILikeInitLocalState);
 	ilike.SetCollationHandling(FunctionCollationHandling::PUSH_COMBINABLE_COLLATIONS);
 	ilike.GetSignature().GetParameter(0).SetName("string");
 	ilike.GetSignature().GetParameter(1).SetName("pattern");
@@ -781,8 +772,7 @@ ScalarFunction ILikeFun::GetFunction() {
 
 ScalarFunction NotILikeFun::GetFunction() {
 	ScalarFunction not_ilike("!~~*", {LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::BOOLEAN,
-	                         ILikeFunction<true>, nullptr, ILikePropagateStats<NotILikeOperatorASCII>,
-	                         ILikeInitLocalState);
+	                         ILikeFunction<true, false>, nullptr, ILikePropagateStats<true>, ILikeInitLocalState);
 	not_ilike.SetCollationHandling(FunctionCollationHandling::PUSH_COMBINABLE_COLLATIONS);
 	not_ilike.GetSignature().GetParameter(0).SetName("string");
 	not_ilike.GetSignature().GetParameter(1).SetName("pattern");
