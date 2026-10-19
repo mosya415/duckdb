@@ -6,6 +6,7 @@
 #include "duckdb/catalog/catalog_entry/pragma_function_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/parser/parsed_data/alter_sequence_info.hpp"
+#include "duckdb/parser/parsed_data/alter_table_info.hpp"
 #include "duckdb/parser/query_node/delete_query_node.hpp"
 #include "duckdb/parser/statement/alter_statement.hpp"
 #include "duckdb/parser/statement/delete_statement.hpp"
@@ -188,6 +189,26 @@ void StatementPreprocessor::ExpandTruncate(MultiStatement &multi_statement) cons
 	                                  std::make_move_iterator(restarts.end()));
 }
 
+void StatementPreprocessor::ResolveAddColumn(MultiStatement &multi_statement) const {
+	auto &statements = multi_statement.statements;
+	if (statements.size() < 2 || statements[0]->type != StatementType::ALTER_STATEMENT) {
+		return;
+	}
+	auto &alter = *statements[0]->Cast<AlterStatement>().info;
+	if (alter.type != AlterType::ALTER_TABLE ||
+	    alter.Cast<AlterTableInfo>().alter_table_type != AlterTableType::ADD_COLUMN) {
+		return;
+	}
+	auto &add_column = alter.Cast<AddColumnInfo>();
+	if (add_column.if_not_found != OnEntryNotFound::RETURN_NULL) {
+		return;
+	}
+	if (!Catalog::GetEntry(context, EntryLookupInfo(CatalogType::TABLE_ENTRY, add_column.GetQualifiedName()),
+	                       OnEntryNotFound::RETURN_NULL)) {
+		statements.resize(1);
+	}
+}
+
 vector<unique_ptr<SQLStatement>> StatementPreprocessor::TryReparsePragma(unique_ptr<SQLStatement> statement) const {
 	// Try reparsing
 	const auto info = statement->Cast<PragmaStatement>().info->Copy();
@@ -247,6 +268,7 @@ void StatementPreprocessor::PreprocessInternal(ClientContextLock &lock, vector<u
 		case StatementType::MULTI_STATEMENT: {
 			auto &multi_statement = statements[i]->Cast<MultiStatement>();
 			ExpandTruncate(multi_statement);
+			ResolveAddColumn(multi_statement);
 			UnpackMultiStatement(multi_statement, full_transaction_state, new_statements, wrap_multi);
 			break;
 		}

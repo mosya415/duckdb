@@ -40,5 +40,6 @@ private:
 	//! statement(s) to replace the current one. Otherwise, it just returns back the original statement in a vector.
 	vector<unique_ptr<SQLStatement>> TryReparsePragma(unique_ptr<SQLStatement> statement) const;
 	void ExpandTruncate(MultiStatement &multi_statement) const;
+	void ResolveAddColumn(MultiStatement &multi_statement) const;
 };
 } // namespace duckdb
