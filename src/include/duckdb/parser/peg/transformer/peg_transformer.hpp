@@ -111,6 +111,7 @@ DUCKDB_REGISTER_TRANSFORM_RESULT_TYPE("duckdb.transform_result.CreateTableColumn
 DUCKDB_REGISTER_TRANSFORM_RESULT_TYPE("duckdb.transform_result.CreateTableDefinition", CreateTableDefinition);
 DUCKDB_REGISTER_TRANSFORM_RESULT_TYPE("duckdb.transform_result.DatePartSpecifier", DatePartSpecifier);
 DUCKDB_REGISTER_TRANSFORM_RESULT_TYPE("duckdb.transform_result.DescribeTarget", DescribeTarget);
+DUCKDB_REGISTER_TRANSFORM_RESULT_TYPE("duckdb.transform_result.DiscardTarget", DiscardTarget);
 DUCKDB_REGISTER_TRANSFORM_RESULT_TYPE("duckdb.transform_result.DistinctClause", DistinctClause);
 DUCKDB_REGISTER_TRANSFORM_RESULT_TYPE("duckdb.transform_result.ExpressionType", ExpressionType);
 DUCKDB_REGISTER_TRANSFORM_RESULT_TYPE("duckdb.transform_result.ExtensionRepositoryInfo", ExtensionRepositoryInfo);
@@ -2289,6 +2290,21 @@ public:
 	static void InitializeDiscardStatementTrampoline(PEGTransformer &transformer, GeneratedTransformProcess &process);
 	static arena_ptr<TransformResultValue> FinalizeDiscardStatementTrampoline(PEGTransformer &transformer,
 	                                                                          GeneratedTransformProcess &process);
+	static void InitializeDiscardTargetTrampoline(PEGTransformer &transformer, GeneratedTransformProcess &process);
+	static arena_ptr<TransformResultValue> FinalizeDiscardTargetTrampoline(PEGTransformer &transformer,
+	                                                                       GeneratedTransformProcess &process);
+	static void InitializeDiscardAllTrampoline(PEGTransformer &transformer, GeneratedTransformProcess &process);
+	static arena_ptr<TransformResultValue> FinalizeDiscardAllTrampoline(PEGTransformer &transformer,
+	                                                                    GeneratedTransformProcess &process);
+	static void InitializeDiscardPlansTrampoline(PEGTransformer &transformer, GeneratedTransformProcess &process);
+	static arena_ptr<TransformResultValue> FinalizeDiscardPlansTrampoline(PEGTransformer &transformer,
+	                                                                      GeneratedTransformProcess &process);
+	static void InitializeDiscardSequencesTrampoline(PEGTransformer &transformer, GeneratedTransformProcess &process);
+	static arena_ptr<TransformResultValue> FinalizeDiscardSequencesTrampoline(PEGTransformer &transformer,
+	                                                                          GeneratedTransformProcess &process);
+	static void InitializeDiscardTempTrampoline(PEGTransformer &transformer, GeneratedTransformProcess &process);
+	static arena_ptr<TransformResultValue> FinalizeDiscardTempTrampoline(PEGTransformer &transformer,
+	                                                                     GeneratedTransformProcess &process);
 	static void InitializeDeleteStatementTrampoline(PEGTransformer &transformer, GeneratedTransformProcess &process);
 	static arena_ptr<TransformResultValue> FinalizeDeleteStatementTrampoline(PEGTransformer &transformer,
 	                                                                         GeneratedTransformProcess &process);
@@ -5559,7 +5575,12 @@ public:
 	                                                             const Identifier &deallocate_target);
 	static bool TransformDeallocatePrepare(PEGTransformer &transformer);
 	static Identifier TransformDeallocateAll(PEGTransformer &transformer);
-	static unique_ptr<SQLStatement> TransformDiscardStatement(PEGTransformer &transformer);
+	static unique_ptr<SQLStatement> TransformDiscardStatement(PEGTransformer &transformer,
+	                                                          const DiscardTarget &discard_target);
+	static DiscardTarget TransformDiscardAll(PEGTransformer &transformer);
+	static DiscardTarget TransformDiscardPlans(PEGTransformer &transformer);
+	static DiscardTarget TransformDiscardSequences(PEGTransformer &transformer);
+	static DiscardTarget TransformDiscardTemp(PEGTransformer &transformer);
 	static unique_ptr<SQLStatement>
 	TransformDeleteStatement(PEGTransformer &transformer, optional<CommonTableExpressionMap> with_clause,
 	                         unique_ptr<BaseTableRef> target_opt_alias,

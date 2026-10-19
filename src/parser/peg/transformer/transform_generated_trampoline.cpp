@@ -1321,6 +1321,20 @@ static const TransformFrameOps DEALLOCATE_ALL_OPS = {"DeallocateAll",
 static const TransformFrameOps DISCARD_STATEMENT_OPS = {"DiscardStatement",
                                                         &PEGTransformerFactory::InitializeDiscardStatementTrampoline,
                                                         &PEGTransformerFactory::FinalizeDiscardStatementTrampoline};
+static const TransformFrameOps DISCARD_TARGET_OPS = {"DiscardTarget",
+                                                     &PEGTransformerFactory::InitializeDiscardTargetTrampoline,
+                                                     &PEGTransformerFactory::FinalizeDiscardTargetTrampoline, true};
+static const TransformFrameOps DISCARD_ALL_OPS = {"DiscardAll", &PEGTransformerFactory::InitializeDiscardAllTrampoline,
+                                                  &PEGTransformerFactory::FinalizeDiscardAllTrampoline};
+static const TransformFrameOps DISCARD_PLANS_OPS = {"DiscardPlans",
+                                                    &PEGTransformerFactory::InitializeDiscardPlansTrampoline,
+                                                    &PEGTransformerFactory::FinalizeDiscardPlansTrampoline};
+static const TransformFrameOps DISCARD_SEQUENCES_OPS = {"DiscardSequences",
+                                                        &PEGTransformerFactory::InitializeDiscardSequencesTrampoline,
+                                                        &PEGTransformerFactory::FinalizeDiscardSequencesTrampoline};
+static const TransformFrameOps DISCARD_TEMP_OPS = {"DiscardTemp",
+                                                   &PEGTransformerFactory::InitializeDiscardTempTrampoline,
+                                                   &PEGTransformerFactory::FinalizeDiscardTempTrampoline};
 static const TransformFrameOps DELETE_STATEMENT_OPS = {"DeleteStatement",
                                                        &PEGTransformerFactory::InitializeDeleteStatementTrampoline,
                                                        &PEGTransformerFactory::FinalizeDeleteStatementTrampoline};
@@ -4068,6 +4082,11 @@ PEGTransformerFactory::GeneratedTransformFrameOps() {
 	    {"DeallocateTarget", &DEALLOCATE_TARGET_OPS},
 	    {"DeallocateAll", &DEALLOCATE_ALL_OPS},
 	    {"DiscardStatement", &DISCARD_STATEMENT_OPS},
+	    {"DiscardTarget", &DISCARD_TARGET_OPS},
+	    {"DiscardAll", &DISCARD_ALL_OPS},
+	    {"DiscardPlans", &DISCARD_PLANS_OPS},
+	    {"DiscardSequences", &DISCARD_SEQUENCES_OPS},
+	    {"DiscardTemp", &DISCARD_TEMP_OPS},
 	    {"DeleteStatement", &DELETE_STATEMENT_OPS},
 	    {"TruncateStatement", &TRUNCATE_STATEMENT_OPS},
 	    {"TruncateTarget", &TRUNCATE_TARGET_OPS},
@@ -13762,14 +13781,83 @@ PEGTransformerFactory::FinalizeDeallocateAllTrampoline(PEGTransformer &transform
 
 void PEGTransformerFactory::InitializeDiscardStatementTrampoline(PEGTransformer &transformer,
                                                                  GeneratedTransformProcess &process) {
-	process.ReserveChildSlots(0);
+	auto &list_pr = process.parse_result.Cast<ListParseResult>();
+	process.ReserveChildSlots(1);
+	process.PushChild({list_pr.GetChild(1)}, 0);
 }
 
 arena_ptr<TransformResultValue>
 PEGTransformerFactory::FinalizeDiscardStatementTrampoline(PEGTransformer &transformer,
                                                           GeneratedTransformProcess &process) {
-	auto result = TransformDiscardStatement(transformer);
+	auto discard_target = process.TakeResult<DiscardTarget>(0);
+	auto result = TransformDiscardStatement(transformer, discard_target);
 	return transformer.MakeResult<unique_ptr<SQLStatement>>(std::move(result));
+}
+
+void PEGTransformerFactory::InitializeDiscardTargetTrampoline(PEGTransformer &transformer,
+                                                              GeneratedTransformProcess &process) {
+	auto &list_pr = process.parse_result.Cast<ListParseResult>();
+	auto &choice_pr = list_pr.Child<ChoiceParseResult>(0);
+	auto &choice_result = choice_pr.GetResult();
+	process.ReserveChildSlots(1);
+	auto child_rule = choice_result.GetRule();
+	auto has_transform_process = child_rule && child_rule->transform_process;
+	if (!has_transform_process) {
+		throw InternalException("No transform process registered for rule '%s'", choice_result.Name());
+	}
+	process.PushChild({*child_rule, choice_result}, 0);
+}
+
+arena_ptr<TransformResultValue>
+PEGTransformerFactory::FinalizeDiscardTargetTrampoline(PEGTransformer &transformer,
+                                                       GeneratedTransformProcess &process) {
+	auto result = process.TakeResult<DiscardTarget>(0);
+	return transformer.MakeResult<DiscardTarget>(result);
+}
+
+void PEGTransformerFactory::InitializeDiscardAllTrampoline(PEGTransformer &transformer,
+                                                           GeneratedTransformProcess &process) {
+	process.ReserveChildSlots(0);
+}
+
+arena_ptr<TransformResultValue>
+PEGTransformerFactory::FinalizeDiscardAllTrampoline(PEGTransformer &transformer, GeneratedTransformProcess &process) {
+	auto result = TransformDiscardAll(transformer);
+	return transformer.MakeResult<DiscardTarget>(result);
+}
+
+void PEGTransformerFactory::InitializeDiscardPlansTrampoline(PEGTransformer &transformer,
+                                                             GeneratedTransformProcess &process) {
+	process.ReserveChildSlots(0);
+}
+
+arena_ptr<TransformResultValue>
+PEGTransformerFactory::FinalizeDiscardPlansTrampoline(PEGTransformer &transformer, GeneratedTransformProcess &process) {
+	auto result = TransformDiscardPlans(transformer);
+	return transformer.MakeResult<DiscardTarget>(result);
+}
+
+void PEGTransformerFactory::InitializeDiscardSequencesTrampoline(PEGTransformer &transformer,
+                                                                 GeneratedTransformProcess &process) {
+	process.ReserveChildSlots(0);
+}
+
+arena_ptr<TransformResultValue>
+PEGTransformerFactory::FinalizeDiscardSequencesTrampoline(PEGTransformer &transformer,
+                                                          GeneratedTransformProcess &process) {
+	auto result = TransformDiscardSequences(transformer);
+	return transformer.MakeResult<DiscardTarget>(result);
+}
+
+void PEGTransformerFactory::InitializeDiscardTempTrampoline(PEGTransformer &transformer,
+                                                            GeneratedTransformProcess &process) {
+	process.ReserveChildSlots(0);
+}
+
+arena_ptr<TransformResultValue>
+PEGTransformerFactory::FinalizeDiscardTempTrampoline(PEGTransformer &transformer, GeneratedTransformProcess &process) {
+	auto result = TransformDiscardTemp(transformer);
+	return transformer.MakeResult<DiscardTarget>(result);
 }
 
 void PEGTransformerFactory::InitializeDeleteStatementTrampoline(PEGTransformer &transformer,

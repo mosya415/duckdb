@@ -2144,6 +2144,26 @@ DictFSSTMode EnumUtil::FromString<DictFSSTMode>(std::string_view value) {
 	return static_cast<DictFSSTMode>(StringUtil::StringToEnum(GetDictFSSTModeValues(), 6, "DictFSSTMode", value));
 }
 
+const StringUtil::EnumStringLiteral *GetDiscardTargetValues() {
+	static constexpr StringUtil::EnumStringLiteral values[] {
+		{ static_cast<uint32_t>(DiscardTarget::ALL), "ALL" },
+		{ static_cast<uint32_t>(DiscardTarget::PLANS), "PLANS" },
+		{ static_cast<uint32_t>(DiscardTarget::SEQUENCES), "SEQUENCES" },
+		{ static_cast<uint32_t>(DiscardTarget::TEMP), "TEMP" }
+	};
+	return values;
+}
+
+template<>
+const char* EnumUtil::ToChars<DiscardTarget>(DiscardTarget value) {
+	return StringUtil::EnumToString(GetDiscardTargetValues(), 4, "DiscardTarget", static_cast<uint32_t>(value));
+}
+
+template<>
+DiscardTarget EnumUtil::FromString<DiscardTarget>(std::string_view value) {
+	return static_cast<DiscardTarget>(StringUtil::StringToEnum(GetDiscardTargetValues(), 4, "DiscardTarget", value));
+}
+
 const StringUtil::EnumStringLiteral *GetDistinctCountSourceValues() {
 	static constexpr StringUtil::EnumStringLiteral values[] {
 		{ static_cast<uint32_t>(DistinctCountSource::CARDINALITY), "CARDINALITY" },
@@ -2675,19 +2695,20 @@ const StringUtil::EnumStringLiteral *GetExtraDropInfoTypeValues() {
 	static constexpr StringUtil::EnumStringLiteral values[] {
 		{ static_cast<uint32_t>(ExtraDropInfoType::INVALID), "INVALID" },
 		{ static_cast<uint32_t>(ExtraDropInfoType::SECRET_INFO), "SECRET_INFO" },
-		{ static_cast<uint32_t>(ExtraDropInfoType::TRIGGER_INFO), "TRIGGER_INFO" }
+		{ static_cast<uint32_t>(ExtraDropInfoType::TRIGGER_INFO), "TRIGGER_INFO" },
+		{ static_cast<uint32_t>(ExtraDropInfoType::DISCARD_INFO), "DISCARD_INFO" }
 	};
 	return values;
 }
 
 template<>
 const char* EnumUtil::ToChars<ExtraDropInfoType>(ExtraDropInfoType value) {
-	return StringUtil::EnumToString(GetExtraDropInfoTypeValues(), 3, "ExtraDropInfoType", static_cast<uint32_t>(value));
+	return StringUtil::EnumToString(GetExtraDropInfoTypeValues(), 4, "ExtraDropInfoType", static_cast<uint32_t>(value));
 }
 
 template<>
 ExtraDropInfoType EnumUtil::FromString<ExtraDropInfoType>(std::string_view value) {
-	return static_cast<ExtraDropInfoType>(StringUtil::StringToEnum(GetExtraDropInfoTypeValues(), 3, "ExtraDropInfoType", value));
+	return static_cast<ExtraDropInfoType>(StringUtil::StringToEnum(GetExtraDropInfoTypeValues(), 4, "ExtraDropInfoType", value));
 }
 
 const StringUtil::EnumStringLiteral *GetExtraPersistentColumnDataTypeValues() {

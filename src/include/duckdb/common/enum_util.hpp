@@ -212,6 +212,8 @@ enum class DialectCompatibilityMode : uint8_t;
 
 enum class DictFSSTMode : uint8_t;
 
+enum class DiscardTarget : uint8_t;
+
 enum class DistinctCountSource : uint8_t;
 
 enum class DistinctType : uint8_t;
@@ -981,6 +983,9 @@ const char* EnumUtil::ToChars<DialectCompatibilityMode>(DialectCompatibilityMode
 
 template<>
 const char* EnumUtil::ToChars<DictFSSTMode>(DictFSSTMode value);
+
+template<>
+const char* EnumUtil::ToChars<DiscardTarget>(DiscardTarget value);
 
 template<>
 const char* EnumUtil::ToChars<DistinctCountSource>(DistinctCountSource value);
@@ -1999,6 +2004,9 @@ DialectCompatibilityMode EnumUtil::FromString<DialectCompatibilityMode>(std::str
 
 template<>
 DictFSSTMode EnumUtil::FromString<DictFSSTMode>(std::string_view value);
+
+template<>
+DiscardTarget EnumUtil::FromString<DiscardTarget>(std::string_view value);
 
 template<>
 DistinctCountSource EnumUtil::FromString<DistinctCountSource>(std::string_view value);
