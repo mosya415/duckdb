@@ -21,11 +21,20 @@ namespace {
 
 constexpr idx_t LIST_AGGREGATES_CHECK_ELEMENTS = 1 << 20;
 
-struct ListAggregatesLocalState : public FunctionLocalState {
-	explicit ListAggregatesLocalState(Allocator &allocator) : arena_allocator(allocator) {
+struct ListAggregatesArena final : public AuxiliaryDataHolder {
+	explicit ListAggregatesArena(Allocator &allocator) : arena_allocator(allocator) {
 	}
 
 	ArenaAllocator arena_allocator;
+};
+
+struct ListAggregatesLocalState : public FunctionLocalState {
+	explicit ListAggregatesLocalState(Allocator &allocator_p)
+	    : allocator(allocator_p), arena(make_uniq<ListAggregatesArena>(allocator_p)) {
+	}
+
+	Allocator &allocator;
+	unique_ptr<ListAggregatesArena> arena;
 };
 
 unique_ptr<FunctionLocalState> ListAggregatesInitLocalState(ExpressionState &state, const BoundFunctionExpression &expr,
@@ -236,7 +245,8 @@ void ListAggregatesFunction(DataChunk &args, ExpressionState &state, Vector &res
 	auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
 	auto &info = func_expr.BindInfo()->Cast<ListAggregatesBindData>();
 	auto &aggr = info.aggr_expr->Cast<BoundAggregateExpression>();
-	auto &allocator = ExecuteFunctionState::GetFunctionState(state)->Cast<ListAggregatesLocalState>().arena_allocator;
+	auto &local_state = ExecuteFunctionState::GetFunctionState(state)->Cast<ListAggregatesLocalState>();
+	auto &allocator = local_state.arena->arena_allocator;
 	allocator.Reset();
 	AggregateFinalizeInputData aggr_input_data(aggr, allocator);
 
@@ -331,6 +341,10 @@ void ListAggregatesFunction(DataChunk &args, ExpressionState &state, Vector &res
 	if (IS_AGGR) {
 		// finalize all the aggregate states
 		aggr.Function().GetStateFinalizeCallback()(state_vector.state_vector, aggr_input_data, result, count, 0);
+		if (!allocator.IsEmpty()) {
+			result.AddAuxiliaryData(std::move(local_state.arena));
+			local_state.arena = make_uniq<ListAggregatesArena>(local_state.allocator);
+		}
 
 	} else {
 		// finalize manually to use the map
