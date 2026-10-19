@@ -43,6 +43,7 @@ SequenceCatalogEntry::SequenceCatalogEntry(Catalog &catalog, SchemaCatalogEntry 
 	this->comment = info.comment;
 	this->tags = info.tags;
 	this->permissions = info.permissions;
+	this->owner_column = info.owner_column;
 }
 
 SequenceCatalogEntry::~SequenceCatalogEntry() {
@@ -575,6 +576,7 @@ unique_ptr<CreateInfo> SequenceCatalogEntry::GetInfo() const {
 	result->comment = comment;
 	result->tags = tags;
 	result->permissions = permissions;
+	result->owner_column = owner_column;
 	return std::move(result);
 }
 

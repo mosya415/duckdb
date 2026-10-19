@@ -10,6 +10,7 @@
 
 #include "duckdb/parser/parsed_data/create_info.hpp"
 #include "duckdb/common/optional.hpp"
+#include "duckdb/common/optional_idx.hpp"
 
 #include "duckdb/common/identifier.hpp"
 namespace duckdb {
@@ -57,6 +58,7 @@ struct CreateSequenceInfo : public CreateInfo {
 	optional<int64_t> last_value;
 	optional<int64_t> recorded_start;
 	vector<Identifier> owned_by;
+	optional_idx owner_column;
 	bool serial = false;
 
 public:

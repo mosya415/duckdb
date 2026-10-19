@@ -488,6 +488,13 @@
         "name": "owned_by",
         "type": "vector<Identifier>",
         "version": "serenedb_v1"
+      },
+      {
+        "id": 16587,
+        "name": "owner_column",
+        "type": "optional_idx",
+        "default": "optional_idx()",
+        "version": "serenedb_v1"
       }
     ],
     "methods": {

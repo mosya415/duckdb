@@ -285,14 +285,21 @@ bool DuckSchemaEntry::DropEntryInternal(CatalogTransaction transaction, CatalogE
 	return true;
 }
 
-static void CreateSerialSequences(CatalogTransaction transaction, DuckSchemaEntry &schema, BoundCreateTableInfo &info) {
+struct SerialSequence {
+	reference<SequenceCatalogEntry> sequence;
+	Identifier column;
+};
+
+static vector<SerialSequence> CreateSerialSequences(CatalogTransaction transaction, DuckSchemaEntry &schema,
+                                                    BoundCreateTableInfo &info) {
+	vector<SerialSequence> created;
 	auto &table = info.Base();
 	if (info.serial_sequences.empty()) {
-		return;
+		return created;
 	}
 	if (table.on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT &&
 	    schema.GetEntry(transaction, CatalogType::TABLE_ENTRY, table.GetTableName())) {
-		return;
+		return created;
 	}
 	for (auto &serial : info.serial_sequences) {
 		CreateSequenceInfo sequence_info;
@@ -301,7 +308,8 @@ static void CreateSerialSequences(CatalogTransaction transaction, DuckSchemaEntr
 		sequence_info.max_value =
 		    Value::MaximumValue(table.columns.GetColumn(serial.column).Type()).GetValue<int64_t>();
 		sequence_info.permissions = std::move(serial.permissions);
-		auto &sequence = *schema.CreateSequence(transaction, sequence_info);
+		auto &sequence = schema.CreateSequence(transaction, sequence_info)->Cast<SequenceCatalogEntry>();
+		created.push_back(SerialSequence {sequence, serial.column});
 		LogicalDependency dependency(sequence);
 		dependency.owned_by = true;
 		if (schema.catalog.Compatibility() == SqlCompatibility::POSTGRES) {
@@ -311,11 +319,18 @@ static void CreateSerialSequences(CatalogTransaction transaction, DuckSchemaEntr
 		}
 		table.dependencies.AddDependency(dependency);
 	}
+	return created;
 }
 
 optional_ptr<CatalogEntry> DuckSchemaEntry::CreateTable(CatalogTransaction transaction, BoundCreateTableInfo &info) {
-	CreateSerialSequences(transaction, *this, info);
+	auto serial_sequences = CreateSerialSequences(transaction, *this, info);
 	auto table = catalog.Cast<DuckCatalog>().MakeTableEntry(transaction, *this, info);
+	for (auto &serial : serial_sequences) {
+		const auto column = table->GetColumn(serial.column).CatalogOid();
+		if (column) {
+			serial.sequence.get().owner_column = column;
+		}
+	}
 	auto &dependencies = info.Base().dependencies;
 
 	vector<unique_ptr<AlterForeignKeyInfo>> fk_arrays;

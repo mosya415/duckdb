@@ -20,6 +20,7 @@ unique_ptr<CreateInfo> CreateSequenceInfo::Copy() const {
 	result->last_value = last_value;
 	result->recorded_start = recorded_start;
 	result->owned_by = owned_by;
+	result->owner_column = owner_column;
 	result->serial = serial;
 	return std::move(result);
 }

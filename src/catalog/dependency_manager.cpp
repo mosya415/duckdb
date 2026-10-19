@@ -1059,6 +1059,7 @@ catalog_entry_map_t<subdependency_set_t> DependencyManager::CheckDropDependencie
 
 	catalog_entry_set_t blocking_dependents;
 
+	const bool owners_depend = catalog.Compatibility() != SqlCompatibility::POSTGRES;
 	auto info = GetLookupProperties(transaction, object);
 	// Look through all the objects that depend on the 'object'
 	ScanAllDependents(transaction, info, [&](DependencyEntry &dep) {
@@ -1066,8 +1067,12 @@ catalog_entry_map_t<subdependency_set_t> DependencyManager::CheckDropDependencie
 		if (!entry) {
 			return;
 		}
+		const auto &flags = dep.Dependent().flags;
+		if (!owners_depend && flags.IsOwnedBy() && !flags.IsBlocking()) {
+			return;
+		}
 
-		if (!CascadeDrop(cascade, dep.Dependent().flags)) {
+		if (!CascadeDrop(cascade, flags)) {
 			// no cascade and there are objects that depend on this object: throw error
 			blocking_dependents.insert(*entry);
 		} else {

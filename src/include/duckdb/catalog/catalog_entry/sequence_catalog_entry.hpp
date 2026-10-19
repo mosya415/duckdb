@@ -123,6 +123,8 @@ public:
 
 	string ToSQL() const override;
 
+	optional_idx owner_column;
+
 private:
 	bool Committed() const;
 	idx_t Block() const;

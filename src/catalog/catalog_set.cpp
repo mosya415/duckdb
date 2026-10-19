@@ -2,6 +2,7 @@
 #include "duckdb/transaction/transaction_data.hpp"
 
 #include "duckdb/catalog/catalog_entry/duck_table_entry.hpp"
+#include "duckdb/catalog/catalog_entry/sequence_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/storage/data_table.hpp"
 #include "duckdb/transaction/local_storage.hpp"
@@ -316,6 +317,12 @@ static CatalogEntry &ColumnOwner(CatalogTransaction transaction, Catalog &catalo
 	return *owner;
 }
 
+static void SetOwnerColumn(CatalogEntry &entry, optional_idx column) {
+	if (entry.type == CatalogType::SEQUENCE_ENTRY) {
+		entry.Cast<SequenceCatalogEntry>().owner_column = column;
+	}
+}
+
 bool CatalogSet::AlterOwnership(CatalogTransaction transaction, ChangeOwnershipInfo &info) {
 	// lock the catalog for writing
 	unique_lock<mutex> write_lock(catalog.GetWriteLock());
@@ -328,6 +335,7 @@ bool CatalogSet::AlterOwnership(CatalogTransaction transaction, ChangeOwnershipI
 	if (info.owner_path.empty() && info.owner_name.empty()) {
 		write_lock.unlock();
 		dependencies.RemoveOwnership(transaction, *entry);
+		SetOwnerColumn(*entry, optional_idx());
 		return true;
 	}
 	if (catalog.Compatibility() == SqlCompatibility::POSTGRES && !info.owner_path.empty()) {
@@ -335,6 +343,7 @@ bool CatalogSet::AlterOwnership(CatalogTransaction transaction, ChangeOwnershipI
 		write_lock.unlock();
 		dependencies.RemoveOwnership(transaction, *entry);
 		dependencies.AddOwnership(transaction, owner, *entry);
+		SetOwnerColumn(*entry, owner.Cast<TableCatalogEntry>().GetColumn(info.owner_path.back()).CatalogOid());
 		return true;
 	}
 	optional_ptr<CatalogEntry> owner_entry;
