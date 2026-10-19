@@ -163,8 +163,9 @@ void TaskScheduler::ScheduleTasks(ProducerToken &producer, vector<shared_ptr<Tas
 	Enqueue(producer, tasks.data(), tasks.size(), pool_type, true);
 }
 
-void TaskScheduler::RescheduleTask(ProducerToken &producer, shared_ptr<Task> task) {
-	Enqueue(producer, &task, 1, TaskSchedulerType::REGULAR, false);
+void TaskScheduler::ScheduleConcurrentTask(ProducerToken &producer, shared_ptr<Task> task,
+                                           TaskSchedulerType pool_type) {
+	Enqueue(producer, &task, 1, pool_type, false);
 }
 
 void TaskScheduler::Enqueue(ProducerToken &producer, shared_ptr<Task> *tasks, idx_t count, TaskSchedulerType pool_type,

@@ -80,10 +80,10 @@ public:
 	//! Schedule a task to be executed by the task scheduler in the given pool
 	void ScheduleTask(ProducerToken &producer, shared_ptr<Task> task, TaskSchedulerType pool_type);
 	void ScheduleTasks(ProducerToken &producer, vector<shared_ptr<Task>> &tasks, TaskSchedulerType pool_type);
+	void ScheduleConcurrentTask(ProducerToken &producer, shared_ptr<Task> task, TaskSchedulerType pool_type);
 	//! Helpers for regular tasks
 	void ScheduleTask(ProducerToken &producer, shared_ptr<Task> task);
 	void ScheduleTasks(ProducerToken &producer, vector<shared_ptr<Task>> &tasks);
-	void RescheduleTask(ProducerToken &producer, shared_ptr<Task> task);
 	//! Fetches a task from a specific producer, returns true if successful or false if no tasks were available
 	bool GetTaskFromProducer(ProducerToken &token, shared_ptr<Task> &task);
 	//! Fetches a task from a specific producer, returns whether a task was found and assigned to `task`.

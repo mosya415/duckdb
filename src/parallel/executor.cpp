@@ -486,7 +486,7 @@ void Executor::RescheduleTask(shared_ptr<Task> &task_p) {
 		if (entry != to_be_rescheduled_tasks.end()) {
 			auto &scheduler = TaskScheduler::GetScheduler(context);
 			to_be_rescheduled_tasks.erase(*task_p);
-			scheduler.RescheduleTask(GetToken(), task_p);
+			scheduler.ScheduleConcurrentTask(GetToken(), task_p, TaskSchedulerType::REGULAR);
 			SignalTaskRescheduled(l);
 			break;
 		}
