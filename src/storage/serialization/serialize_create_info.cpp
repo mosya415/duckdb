@@ -327,6 +327,9 @@ void CreateSequenceInfo::Serialize(Serializer &serializer) const {
 	if (serializer.ShouldSerialize(StorageVersion::SERENEDB_V1)) {
 		serializer.WritePropertyWithDefault<vector<Identifier>>(16586, "owned_by", owned_by);
 	}
+	if (serializer.ShouldSerialize(StorageVersion::SERENEDB_V1)) {
+		serializer.WritePropertyWithDefault<optional_idx>(16587, "owner_column", owner_column, optional_idx());
+	}
 }
 
 unique_ptr<CreateInfo> CreateSequenceInfo::Deserialize(Deserializer &deserializer) {
@@ -342,6 +345,7 @@ unique_ptr<CreateInfo> CreateSequenceInfo::Deserialize(Deserializer &deserialize
 	deserializer.ReadPropertyWithExplicitDefault<uint64_t>(16584, "cache", result->cache, 1ULL);
 	deserializer.ReadPropertyWithDefault<optional<int64_t>>(16585, "recorded_start", result->recorded_start);
 	deserializer.ReadPropertyWithDefault<vector<Identifier>>(16586, "owned_by", result->owned_by);
+	deserializer.ReadPropertyWithExplicitDefault<optional_idx>(16587, "owner_column", result->owner_column, optional_idx());
 	result->SetName(std::move(name));
 	return std::move(result);
 }
