@@ -19,10 +19,15 @@ string JobSchedule::ToString() const {
 	return result;
 }
 
+static bool SameInterval(const Value &left, const Value &right) {
+	auto lhs = left.GetValue<interval_t>();
+	auto rhs = right.GetValue<interval_t>();
+	return lhs.months == rhs.months && lhs.days == rhs.days && lhs.micros == rhs.micros;
+}
+
 bool JobSchedule::operator==(const JobSchedule &rhs) const {
-	return kind == rhs.kind && interval.GetValue<interval_t>() == rhs.interval.GetValue<interval_t>() &&
-	       offset.GetValue<interval_t>() == rhs.offset.GetValue<interval_t>() &&
-	       randomize.GetValue<interval_t>() == rhs.randomize.GetValue<interval_t>() && concurrent == rhs.concurrent;
+	return kind == rhs.kind && SameInterval(interval, rhs.interval) && SameInterval(offset, rhs.offset) &&
+	       SameInterval(randomize, rhs.randomize) && concurrent == rhs.concurrent;
 }
 
 } // namespace duckdb

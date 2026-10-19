@@ -2,6 +2,7 @@
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/parser/parsed_data/create_job_info.hpp"
+#include "duckdb/parser/statement/explain_statement.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/expression_binder/constant_binder.hpp"
 
@@ -36,9 +37,26 @@ void Binder::BindJobSchedule(JobSchedule &schedule, unique_ptr<JobScheduleInfo> 
 	parsed_schedule.reset();
 }
 
+static void CheckExplainedJobBody(const SQLStatement &body) {
+	if (body.type != StatementType::EXPLAIN_STATEMENT) {
+		return;
+	}
+	auto &statement = *body.Cast<ExplainStatement>().stmt;
+	if (statement.type == StatementType::TRANSACTION_STATEMENT) {
+		throw ParserException("CREATE JOB body cannot be a transaction statement");
+	}
+	if (statement.type == StatementType::MULTI_STATEMENT) {
+		throw ParserException("CREATE JOB body cannot be a statement that runs as several statements");
+	}
+}
+
 SchemaCatalogEntry &Binder::BindCreateJobInfo(CreateJobInfo &info) {
 	auto &schema = BindCreateSchema(info);
 	BindJobSchedule(info.schedule, info.parsed_schedule);
+	if (!CreateJobInfo::IsScript(info.body)) {
+		CheckExplainedJobBody(*info.body[0]);
+		info.SetBody(info.body[0]->ToString());
+	}
 	return schema;
 }
 
