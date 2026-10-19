@@ -612,13 +612,28 @@ FilterPushdownResult FilterCombiner::TryPushdownLikeFilter(TableFilterSet &table
 	auto &func = expr.Cast<BoundFunctionExpression>();
 	auto &function_name = func.Function().GetName();
 	const bool case_insensitive = function_name == "~~*";
-	if (function_name != "~~" && !case_insensitive) {
+	const bool glob = function_name == "~~~";
+	const bool escape_argument = function_name == "like_escape";
+	if (function_name != "~~" && !case_insensitive && !glob && !escape_argument) {
 		return FilterPushdownResult::NO_PUSHDOWN;
 	}
 	if (func.GetChildren()[0]->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF ||
 	    func.GetChildren()[1]->GetExpressionType() != ExpressionType::VALUE_CONSTANT) {
 		// we need col LIKE 'literal' in order to generate extra filters
 		return FilterPushdownResult::NO_PUSHDOWN;
+	}
+	bool has_escape = true;
+	char escape = '\\';
+	if (escape_argument) {
+		if (func.GetChildren()[2]->GetExpressionType() != ExpressionType::VALUE_CONSTANT) {
+			return FilterPushdownResult::NO_PUSHDOWN;
+		}
+		auto &escape_value = func.GetChildren()[2]->Cast<BoundConstantExpression>().GetValue();
+		if (escape_value.IsNull() || StringValue::Get(escape_value).size() > 1) {
+			return FilterPushdownResult::NO_PUSHDOWN;
+		}
+		has_escape = !StringValue::Get(escape_value).empty();
+		escape = has_escape ? StringValue::Get(escape_value)[0] : '\0';
 	}
 
 	//! This is a like function.
@@ -630,26 +645,26 @@ FilterPushdownResult FilterCombiner::TryPushdownLikeFilter(TableFilterSet &table
 		return FilterPushdownResult::NO_PUSHDOWN;
 	}
 	auto &like_string = StringValue::Get(constant_value_expr.GetValue());
-	if (like_string[0] == '%' || like_string[0] == '_') {
-		//! If the like starts with a special character we have no fixed prefix so nothing to pushdown
-		return FilterPushdownResult::NO_PUSHDOWN;
-	}
 	string prefix;
 	bool equality = true;
 	for (idx_t i = 0; i < like_string.size(); i++) {
 		const char c = like_string[i];
-		if (c == '%' || c == '_') {
-			equality = false;
-			break;
-		}
-		if (c == '\\') {
+		if (has_escape && c == escape) {
 			if (++i == like_string.size()) {
 				return FilterPushdownResult::NO_PUSHDOWN;
 			}
 			prefix += like_string[i];
 			continue;
 		}
+		if (glob ? c == '*' || c == '?' || c == '[' : c == '%' || c == '_') {
+			equality = false;
+			break;
+		}
 		prefix += c;
+	}
+	if (!equality && prefix.empty()) {
+		//! If the like starts with a special character we have no fixed prefix so nothing to pushdown
+		return FilterPushdownResult::NO_PUSHDOWN;
 	}
 	if (equality && !case_insensitive) {
 		//! If the LIKE has no special characters we can turn it into an equality and push that down

@@ -5,7 +5,9 @@
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/function/scalar/string_common.hpp"
 #include "duckdb/function/scalar/string_functions.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/storage/statistics/string_stats.hpp"
 
 #include "duckdb/execution/expression_executor.hpp"
 #include "re2/segment_plan.h"
@@ -839,6 +841,64 @@ void RegularLikeFunction(DataChunk &input, ExpressionState &state, Vector &resul
 	}
 }
 
+template <bool GLOB>
+bool PatternMinSize(const string &pattern, bool has_escape, char escape, idx_t &min_size) {
+	min_size = 0;
+	for (idx_t i = 0; i < pattern.size(); i++) {
+		auto c = pattern[i];
+		if (has_escape && c == escape) {
+			if (++i == pattern.size()) {
+				return false;
+			}
+		} else if (c == (GLOB ? '*' : '%')) {
+			continue;
+		} else if (GLOB && c == '[') {
+			min_size++;
+			return true;
+		}
+		min_size++;
+	}
+	return true;
+}
+
+template <bool GLOB>
+FilterPropagateResult PatternFilterPrune(const FunctionStatisticsPruneInput &input) {
+	auto &children = input.function.GetChildren();
+	if (children.size() < 2 || children[1]->GetExpressionType() != ExpressionType::VALUE_CONSTANT) {
+		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
+	}
+	bool has_escape = true;
+	char escape = '\\';
+	if (children.size() == 3) {
+		if (children[2]->GetExpressionType() != ExpressionType::VALUE_CONSTANT) {
+			return FilterPropagateResult::NO_PRUNING_POSSIBLE;
+		}
+		auto &escape_value = children[2]->Cast<BoundConstantExpression>().GetValue();
+		if (escape_value.IsNull() || StringValue::Get(escape_value).size() > 1) {
+			return FilterPropagateResult::NO_PRUNING_POSSIBLE;
+		}
+		has_escape = !StringValue::Get(escape_value).empty();
+		escape = has_escape ? StringValue::Get(escape_value)[0] : '\0';
+	}
+	auto column_stats = input.ChildStats(0);
+	if (!column_stats || column_stats->GetStatsType() != StatisticsType::STRING_STATS) {
+		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
+	}
+	if (!column_stats->CanHaveNoNull()) {
+		return FilterPropagateResult::FILTER_ALWAYS_FALSE;
+	}
+	auto &pattern_value = children[1]->Cast<BoundConstantExpression>().GetValue();
+	if (pattern_value.IsNull()) {
+		return FilterPropagateResult::FILTER_ALWAYS_FALSE;
+	}
+	idx_t min_size = 0;
+	if (!PatternMinSize<GLOB>(StringValue::Get(pattern_value), has_escape, escape, min_size) ||
+	    !StringStats::HasMaxStringLength(*column_stats) || StringStats::MaxStringLength(*column_stats) >= min_size) {
+		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
+	}
+	return FilterPropagateResult::FILTER_ALWAYS_FALSE;
+}
+
 } // namespace
 
 ScalarFunction NotLikeFun::GetFunction() {
@@ -856,6 +916,7 @@ ScalarFunction GlobPatternFun::GetFunction() {
 	glob.SetCollationHandling(FunctionCollationHandling::PUSH_COMBINABLE_COLLATIONS);
 	glob.GetSignature().GetParameter(0).SetName("string");
 	glob.GetSignature().GetParameter(1).SetName("pattern");
+	glob.SetFilterPruneCallback(PatternFilterPrune<true>);
 	return glob;
 }
 
@@ -883,6 +944,7 @@ ScalarFunction LikeFun::GetFunction() {
 	like.SetCollationHandling(FunctionCollationHandling::PUSH_COMBINABLE_COLLATIONS);
 	like.GetSignature().GetParameter(0).SetName("string");
 	like.GetSignature().GetParameter(1).SetName("pattern");
+	like.SetFilterPruneCallback(PatternFilterPrune<false>);
 	return like;
 }
 
@@ -926,6 +988,7 @@ ScalarFunction LikeEscapeFun::GetFunction() {
 	    .AddParameter("like_specifier", LogicalType::VARCHAR)
 	    .AddParameter("escape_character", LogicalType::VARCHAR);
 	like_escape.SetCollationHandling(FunctionCollationHandling::PUSH_COMBINABLE_COLLATIONS);
+	like_escape.SetFilterPruneCallback(PatternFilterPrune<false>);
 	return like_escape;
 }
 
