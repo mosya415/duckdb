@@ -248,9 +248,11 @@ struct LikeSegment {
 };
 
 struct LikeMatcher : public FunctionData {
-	LikeMatcher(string like_pattern_p, vector<LikeSegment> segments, bool has_start_percentage, bool has_end_percentage)
-	    : like_pattern(std::move(like_pattern_p)), segments(std::move(segments)),
-	      has_start_percentage(has_start_percentage), has_end_percentage(has_end_percentage) {
+	LikeMatcher(string like_pattern_p, bool has_escape, char escape, vector<LikeSegment> segments,
+	            bool has_start_percentage, bool has_end_percentage)
+	    : like_pattern(std::move(like_pattern_p)), has_escape(has_escape), escape(escape),
+	      segments(std::move(segments)), has_start_percentage(has_start_percentage),
+	      has_end_percentage(has_end_percentage) {
 	}
 
 	bool Match(string_t &str) {
@@ -312,55 +314,62 @@ struct LikeMatcher : public FunctionData {
 		}
 	}
 
-	static unique_ptr<LikeMatcher> CreateLikeMatcher(string like_pattern, char escape = '\\') {
+	static unique_ptr<LikeMatcher> CreateLikeMatcher(string like_pattern, bool has_escape = true, char escape = '\\') {
 		vector<LikeSegment> segments;
-		idx_t last_non_pattern = 0;
+		string literal;
 		bool has_start_percentage = false;
 		bool has_end_percentage = false;
 		for (idx_t i = 0; i < like_pattern.size(); i++) {
 			auto ch = like_pattern[i];
-			if (ch == escape || ch == '%' || ch == '_') {
-				// special character, push a constant pattern
-				if (i > last_non_pattern) {
-					segments.emplace_back(like_pattern.substr(last_non_pattern, i - last_non_pattern));
-				}
-				last_non_pattern = i + 1;
-				if (ch == escape || ch == '_') {
-					// escape or underscore: could not create efficient like matcher
-					// FIXME: we could handle escaped percentages here
+			if (has_escape && ch == escape) {
+				if (i + 1 == like_pattern.size()) {
 					return nullptr;
-				} else {
-					// sample_size
-					if (i == 0) {
-						has_start_percentage = true;
-					}
-					if (i + 1 == like_pattern.size()) {
-						has_end_percentage = true;
-					}
 				}
+				literal += like_pattern[++i];
+				continue;
+			}
+			if (ch == '_') {
+				return nullptr;
+			}
+			if (ch != '%') {
+				literal += ch;
+				continue;
+			}
+			if (!literal.empty()) {
+				segments.emplace_back(std::move(literal));
+				literal.clear();
+			}
+			if (i == 0) {
+				has_start_percentage = true;
+			}
+			if (i + 1 == like_pattern.size()) {
+				has_end_percentage = true;
 			}
 		}
-		if (last_non_pattern < like_pattern.size()) {
-			segments.emplace_back(like_pattern.substr(last_non_pattern, like_pattern.size() - last_non_pattern));
+		if (!literal.empty()) {
+			segments.emplace_back(std::move(literal));
 		}
 		if (segments.empty()) {
 			return nullptr;
 		}
-		return make_uniq<LikeMatcher>(std::move(like_pattern), std::move(segments), has_start_percentage,
-		                              has_end_percentage);
+		return make_uniq<LikeMatcher>(std::move(like_pattern), has_escape, escape, std::move(segments),
+		                              has_start_percentage, has_end_percentage);
 	}
 
 	unique_ptr<FunctionData> Copy() const override {
-		return make_uniq<LikeMatcher>(like_pattern, segments, has_start_percentage, has_end_percentage);
+		return make_uniq<LikeMatcher>(like_pattern, has_escape, escape, segments, has_start_percentage,
+		                              has_end_percentage);
 	}
 
 	bool Equals(const FunctionData &other_p) const override {
 		auto &other = other_p.Cast<LikeMatcher>();
-		return like_pattern == other.like_pattern;
+		return like_pattern == other.like_pattern && has_escape == other.has_escape && escape == other.escape;
 	}
 
 private:
 	string like_pattern;
+	bool has_escape;
+	char escape;
 	vector<LikeSegment> segments;
 	bool has_start_percentage;
 	bool has_end_percentage;
@@ -435,28 +444,83 @@ idx_t WithBackslashEscape(const char *data, idx_t size, char escape, char *resul
 	return length;
 }
 
-struct LikeEscapeOperator {
-	template <class TA, class TB, class TC>
-	static inline bool Operation(TA str, TB pattern, TC escape) {
-		char escape_char = GetEscapeChar(escape);
-		return escape.GetSize() == 0 ? LikeOperatorFunction(str, pattern)
-		                             : LikeOperatorFunction(str, pattern, escape_char);
+bool LikeEscapeOperator(string_t str, string_t pattern, string_t escape) {
+	char escape_char = GetEscapeChar(escape);
+	return escape.GetSize() == 0 ? LikeOperatorFunction(str, pattern) : LikeOperatorFunction(str, pattern, escape_char);
+}
+
+bool UniformPattern(const Vector &patterns, string_t &pattern) {
+	if (patterns.GetVectorType() == VectorType::CONSTANT_VECTOR) {
+		if (ConstantVector::IsNull(patterns)) {
+			return false;
+		}
+		pattern = *ConstantVector::GetData<string_t>(patterns);
+		return true;
 	}
+	auto values = patterns.Values<string_t>();
+	if (values.size() == 0 || !values[0].IsValid()) {
+		return false;
+	}
+	pattern = values[0].GetValue();
+	for (auto entry : values) {
+		if (!entry.IsValid() || entry.GetValue() != pattern) {
+			return false;
+		}
+	}
+	return true;
+}
+
+struct LikeLocalState : public FunctionLocalState {
+	optional_ptr<LikeMatcher> Matcher(string_t pattern, bool has_escape, char escape) {
+		if (!prepared || pattern != last_pattern || has_escape != last_has_escape || escape != last_escape) {
+			last_pattern.assign(pattern.GetData(), pattern.GetSize());
+			last_has_escape = has_escape;
+			last_escape = escape;
+			matcher = LikeMatcher::CreateLikeMatcher(last_pattern, has_escape, escape);
+			prepared = true;
+		}
+		return matcher.get();
+	}
+
+	string last_pattern;
+	bool last_has_escape = false;
+	char last_escape = '\0';
+	bool prepared = false;
+	unique_ptr<LikeMatcher> matcher;
 };
 
-struct NotLikeEscapeOperator {
-	template <class TA, class TB, class TC>
-	static inline bool Operation(TA str, TB pattern, TC escape) {
-		return !LikeEscapeOperator::Operation(str, pattern, escape);
-	}
-};
+unique_ptr<FunctionLocalState> LikeInitLocalState(ExpressionState &state, const BoundFunctionExpression &expr,
+                                                  FunctionData *bind_data) {
+	return make_uniq<LikeLocalState>();
+}
 
-struct LikeOperator {
-	template <class TA, class TB, class TR>
-	static inline TR Operation(TA str, TB pattern) {
-		return LikeOperatorFunction(str, pattern, '\\');
+template <bool INVERT>
+void LikeMatchPatterns(LikeLocalState &lstate, const Vector &strings, const Vector &patterns, bool has_escape,
+                       char escape, Vector &result) {
+	string_t pattern;
+	if (UniformPattern(patterns, pattern)) {
+		auto matcher = lstate.Matcher(pattern, has_escape, escape);
+		if (matcher) {
+			UnaryExecutor::Execute<string_t, bool>(strings, result, [&](string_t str) {
+				bool match = matcher->Match(str);
+				return INVERT ? !match : match;
+			});
+			return;
+		}
 	}
-};
+	if (has_escape) {
+		BinaryExecutor::Execute<string_t, string_t, bool>(strings, patterns, result,
+		                                                  [&](string_t str, string_t pattern) {
+			                                                  bool match = LikeOperatorFunction(str, pattern, escape);
+			                                                  return INVERT ? !match : match;
+		                                                  });
+		return;
+	}
+	BinaryExecutor::Execute<string_t, string_t, bool>(strings, patterns, result, [&](string_t str, string_t pattern) {
+		bool match = LikeOperatorFunction(str, pattern);
+		return INVERT ? !match : match;
+	});
+}
 
 struct ILikeBuffer {
 	char *Reserve(idx_t size) {
@@ -499,16 +563,12 @@ struct ILikeMatcher {
 			memcpy(copy, lowered.pattern.GetData(), size);
 			lowered.pattern = string_t(copy, UnsafeNumericCast<uint32_t>(size));
 		}
-		auto data = lowered.pattern.GetData();
-		// the matcher cannot honor escape semantics, so only use it when the escape char never appears in the
-		// (lowercased) pattern, in which case escape is irrelevant and the pattern is a plain LIKE pattern
-		if (!lowered.has_escape || memchr(data, lowered.escape, size) == nullptr) {
-			// Build a case-insensitive matcher from the lowercased pattern. Because both the pattern and each string
-			// value are lowercased, a case-sensitive LikeMatcher over lowercased data is equivalent to ILIKE, and it
-			// uses the fast SIMD FindStrInStr/memcmp contains path. Returns null for patterns with '_' or only '%';
-			// in that case we fall back to the generic recursive matcher on the lowercased values.
-			matcher = LikeMatcher::CreateLikeMatcher(string(data, size));
-		}
+		// Build a case-insensitive matcher from the lowercased pattern. Because both the pattern and each string
+		// value are lowercased, a case-sensitive LikeMatcher over lowercased data is equivalent to ILIKE, and it
+		// uses the fast SIMD FindStrInStr/memcmp contains path. Returns null for patterns with '_' or only '%';
+		// in that case we fall back to the generic recursive matcher on the lowercased values.
+		matcher =
+		    LikeMatcher::CreateLikeMatcher(string(lowered.pattern.GetData(), size), lowered.has_escape, lowered.escape);
 	}
 
 	bool Match(string_t &str) {
@@ -558,13 +618,6 @@ bool ILikeOperatorFunction(ILikeLocalState &lstate, string_t str, string_t patte
 	return pat_lcase.Match(str_lcase);
 }
 
-struct NotLikeOperator {
-	template <class TA, class TB, class TR>
-	static inline TR Operation(TA str, TB pattern) {
-		return !LikeOperatorFunction(str, pattern, '\\');
-	}
-};
-
 struct ILikeOperatorASCII {
 	template <class TA, class TB, class TR>
 	static inline TR Operation(TA str, TB pattern) {
@@ -587,15 +640,26 @@ struct GlobOperator {
 	}
 };
 
-// This can be moved to the scalar_function class
-template <typename FUNC>
+template <bool INVERT>
 void LikeEscapeFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	const auto &str = args.data[0];
 	const auto &pattern = args.data[1];
 	const auto &escape = args.data[2];
 
+	if (escape.GetVectorType() == VectorType::CONSTANT_VECTOR && !ConstantVector::IsNull(escape)) {
+		auto escape_str = *ConstantVector::GetData<string_t>(escape);
+		if (escape_str.GetSize() <= 1) {
+			auto &lstate = ExecuteFunctionState::GetFunctionState(state)->Cast<LikeLocalState>();
+			LikeMatchPatterns<INVERT>(lstate, str, pattern, escape_str.GetSize() == 1, GetEscapeChar(escape_str),
+			                          result);
+			return;
+		}
+	}
 	TernaryExecutor::Execute<string_t, string_t, string_t, bool>(
-	    str, pattern, escape, result, FUNC::template Operation<string_t, string_t, string_t>);
+	    str, pattern, escape, result, [&](string_t str, string_t pattern, string_t escape) {
+		    bool match = LikeEscapeOperator(str, pattern, escape);
+		    return INVERT ? !match : match;
+	    });
 }
 
 template <bool INVERT>
@@ -617,10 +681,7 @@ void ILikeConstantPattern(ILikeLocalState &lstate, const Vector &str_vec, string
 }
 
 // Execution function for ILIKE / NOT ILIKE ... ESCAPE. Mirrors ILikeFunction: when the pattern and escape are
-// both constant, lowercase the pattern once and reuse a scratch buffer for the per-row string lowercasing. If the
-// escape character does not occur in the pattern, escape handling is a no-op, so we build the case-folded
-// LikeMatcher and use the fast SIMD contains path; otherwise we fall back to the generic escape-aware matcher on
-// the lowercased values. Non-constant pattern/escape falls back to the per-row ternary path.
+// both constant, lowercase the pattern once and reuse a scratch buffer for the per-row string lowercasing.
 template <bool INVERT>
 void ILikeEscapeFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &lstate = ExecuteFunctionState::GetFunctionState(state)->Cast<ILikeLocalState>();
@@ -628,13 +689,12 @@ void ILikeEscapeFunction(DataChunk &args, ExpressionState &state, Vector &result
 	auto &pattern_vec = args.data[1];
 	auto &escape_vec = args.data[2];
 
-	if (pattern_vec.GetVectorType() == VectorType::CONSTANT_VECTOR && !ConstantVector::IsNull(pattern_vec) &&
-	    escape_vec.GetVectorType() == VectorType::CONSTANT_VECTOR && !ConstantVector::IsNull(escape_vec)) {
-		ILikeConstantPattern<INVERT>(lstate, str_vec, *ConstantVector::GetData<string_t>(pattern_vec),
-		                             *ConstantVector::GetData<string_t>(escape_vec), result);
+	string_t pattern;
+	string_t escape;
+	if (UniformPattern(pattern_vec, pattern) && UniformPattern(escape_vec, escape)) {
+		ILikeConstantPattern<INVERT>(lstate, str_vec, pattern, escape, result);
 		return;
 	}
-	// non-constant pattern/escape: fall back to the generic per-row implementation
 	TernaryExecutor::Execute<string_t, string_t, string_t, bool>(
 	    str_vec, pattern_vec, escape_vec, result, [&](string_t str, string_t pattern, string_t escape) {
 		    bool match = ILikeOperatorFunction(lstate, str, pattern, escape);
@@ -663,12 +723,11 @@ void ILikeFunction(DataChunk &input, ExpressionState &state, Vector &result) {
 	auto &lstate = ExecuteFunctionState::GetFunctionState(state)->Cast<ILikeLocalState>();
 	auto &pattern_vec = input.data[1];
 	string_t escape("\\", 1);
-	if (pattern_vec.GetVectorType() == VectorType::CONSTANT_VECTOR && !ConstantVector::IsNull(pattern_vec)) {
-		ILikeConstantPattern<INVERT>(lstate, input.data[0], *ConstantVector::GetData<string_t>(pattern_vec), escape,
-		                             result);
+	string_t pattern;
+	if (UniformPattern(pattern_vec, pattern)) {
+		ILikeConstantPattern<INVERT>(lstate, input.data[0], pattern, escape, result);
 		return;
 	}
-	// non-constant pattern: fall back to the generic per-row implementation
 	BinaryExecutor::Execute<string_t, string_t, bool>(
 	    input.data[0], pattern_vec, result, [&](string_t str, string_t pattern) {
 		    bool match = ILikeOperatorFunction(lstate, str, pattern, escape);
@@ -676,7 +735,7 @@ void ILikeFunction(DataChunk &input, ExpressionState &state, Vector &result) {
 	    });
 }
 
-template <class OP, bool INVERT>
+template <bool INVERT>
 void RegularLikeFunction(DataChunk &input, ExpressionState &state, Vector &result) {
 	auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
 	if (func_expr.BindInfo()) {
@@ -686,8 +745,8 @@ void RegularLikeFunction(DataChunk &input, ExpressionState &state, Vector &resul
 			return INVERT ? !matcher.Match(input) : matcher.Match(input);
 		});
 	} else {
-		// use generic like matcher
-		BinaryExecutor::ExecuteStandard<string_t, string_t, bool, OP>(input.data[0], input.data[1], result);
+		auto &lstate = ExecuteFunctionState::GetFunctionState(state)->Cast<LikeLocalState>();
+		LikeMatchPatterns<INVERT>(lstate, input.data[0], input.data[1], true, '\\', result);
 	}
 }
 
@@ -695,7 +754,7 @@ void RegularLikeFunction(DataChunk &input, ExpressionState &state, Vector &resul
 
 ScalarFunction NotLikeFun::GetFunction() {
 	ScalarFunction not_like("!~~", {LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::BOOLEAN,
-	                        RegularLikeFunction<NotLikeOperator, true>, LikeBindFunction);
+	                        RegularLikeFunction<true>, LikeBindFunction, nullptr, LikeInitLocalState);
 	not_like.SetCollationHandling(FunctionCollationHandling::PUSH_COMBINABLE_COLLATIONS);
 	not_like.GetSignature().GetParameter(0).SetName("string");
 	not_like.GetSignature().GetParameter(1).SetName("pattern");
@@ -732,7 +791,7 @@ ScalarFunction NotILikeFun::GetFunction() {
 
 ScalarFunction LikeFun::GetFunction() {
 	ScalarFunction like("~~", {LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::BOOLEAN,
-	                    RegularLikeFunction<LikeOperator, false>, LikeBindFunction);
+	                    RegularLikeFunction<false>, LikeBindFunction, nullptr, LikeInitLocalState);
 	like.SetCollationHandling(FunctionCollationHandling::PUSH_COMBINABLE_COLLATIONS);
 	like.GetSignature().GetParameter(0).SetName("string");
 	like.GetSignature().GetParameter(1).SetName("pattern");
@@ -740,8 +799,8 @@ ScalarFunction LikeFun::GetFunction() {
 }
 
 ScalarFunction NotLikeEscapeFun::GetFunction() {
-	ScalarFunction not_like_escape("not_like_escape", {}, LogicalType::BOOLEAN,
-	                               LikeEscapeFunction<NotLikeEscapeOperator>);
+	ScalarFunction not_like_escape("not_like_escape", {}, LogicalType::BOOLEAN, LikeEscapeFunction<true>, nullptr,
+	                               nullptr, LikeInitLocalState);
 	not_like_escape.GetSignature()
 	    .AddParameter("string", LogicalType::VARCHAR)
 	    .AddParameter("like_specifier", LogicalType::VARCHAR)
@@ -772,7 +831,8 @@ ScalarFunction NotIlikeEscapeFun::GetFunction() {
 	return not_ilike_escape;
 }
 ScalarFunction LikeEscapeFun::GetFunction() {
-	ScalarFunction like_escape("like_escape", {}, LogicalType::BOOLEAN, LikeEscapeFunction<LikeEscapeOperator>);
+	ScalarFunction like_escape("like_escape", {}, LogicalType::BOOLEAN, LikeEscapeFunction<false>, nullptr, nullptr,
+	                           LikeInitLocalState);
 	like_escape.GetSignature()
 	    .AddParameter("string", LogicalType::VARCHAR)
 	    .AddParameter("like_specifier", LogicalType::VARCHAR)
