@@ -265,11 +265,11 @@ bool PEGTransformerFactory::TransformSerialType(LogicalType &type) {
 		return false;
 	}
 	auto type_name = type_expr.GetTypeName().GetIdentifierName();
-	if (type_name == "serial") {
+	if (type_name == "serial" || type_name == "serial4") {
 		type = LogicalType::INTEGER;
-	} else if (type_name == "bigserial") {
+	} else if (type_name == "bigserial" || type_name == "serial8") {
 		type = LogicalType::BIGINT;
-	} else if (type_name == "smallserial") {
+	} else if (type_name == "smallserial" || type_name == "serial2") {
 		type = LogicalType::SMALLINT;
 	} else {
 		return false;
