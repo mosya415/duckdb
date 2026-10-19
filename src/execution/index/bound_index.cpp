@@ -144,6 +144,10 @@ void BoundIndex::ExecuteExpressions(DataChunk &input, DataChunk &result) const {
 	executor.Execute(input, result);
 }
 
+void BoundIndex::ExecuteExpressions(ClientContext &context, DataChunk &input, DataChunk &result) const {
+	executor.Execute(context, input, result);
+}
+
 idx_t BoundIndex::UnboundExpressionCount() const {
 	return unbound_expressions.size();
 }

@@ -10,7 +10,7 @@ namespace duckdb {
 namespace {
 
 struct ListReduceLocalState final : public FunctionLocalState {
-	ListReduceLocalState(ClientContext &context, const Expression &lambda_expr) : expr_executor(context, lambda_expr) {
+	ListReduceLocalState(ExpressionState &state, const Expression &lambda_expr) : expr_executor(state, lambda_expr) {
 		odd_result_chunk.Initialize(Allocator::DefaultAllocator(), {lambda_expr.GetReturnType()});
 		even_result_chunk.Initialize(Allocator::DefaultAllocator(), {lambda_expr.GetReturnType()});
 	}
@@ -365,7 +365,7 @@ unique_ptr<FunctionLocalState> ListReduceInitLocalState(ExpressionState &state, 
 	if (!info.lambda_expr) {
 		return nullptr;
 	}
-	return make_uniq<ListReduceLocalState>(state.GetContext(), *info.lambda_expr);
+	return make_uniq<ListReduceLocalState>(state, *info.lambda_expr);
 }
 
 } // namespace

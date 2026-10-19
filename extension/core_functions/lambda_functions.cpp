@@ -20,11 +20,11 @@ namespace duckdb {
 //! LambdaExecuteInfo holds information for executing the lambda expression on an input chunk and
 //! a resulting lambda chunk.
 struct LambdaExecuteInfo final : public FunctionLocalState {
-	LambdaExecuteInfo(ClientContext &context, const Expression &lambda_expr, const BoundFunctionExpression &expr,
-	                  const bool has_index)
-	    : has_index(has_index), index_vector(LogicalType::BIGINT), child_sel(STANDARD_VECTOR_SIZE),
-	      row_sel(STANDARD_VECTOR_SIZE), filter_sel(STANDARD_VECTOR_SIZE) {
-		expr_executor = make_uniq<ExpressionExecutor>(context, lambda_expr);
+	LambdaExecuteInfo(ExpressionState &state, const ListLambdaBindData &info, const BoundFunctionExpression &expr)
+	    : has_index(info.has_index), index_offset(info.index_offset), index_vector(LogicalType::BIGINT),
+	      child_sel(STANDARD_VECTOR_SIZE), row_sel(STANDARD_VECTOR_SIZE), filter_sel(STANDARD_VECTOR_SIZE) {
+		auto &lambda_expr = *info.lambda_expr;
+		expr_executor = make_uniq<ExpressionExecutor>(state, lambda_expr);
 
 		// get the input types for the input chunk
 		vector<LogicalType> input_types;
@@ -51,11 +51,6 @@ struct LambdaExecuteInfo final : public FunctionLocalState {
 		for (idx_t i = 0; i < input_types.size(); i++) {
 			slice_sels.emplace_back(STANDARD_VECTOR_SIZE);
 		}
-		// Spark Compatibility Mode: zero-based index for lambdas
-		if (Settings::Get<DialectCompatibilityModeSetting>(context) == DialectCompatibilityMode::SPARK) {
-			// Spark's lambda index parameter is 0-based; default SQL is 1-based
-			index_offset = 0;
-		}
 	};
 
 	//! The expression executor that executes the lambda expression
@@ -67,7 +62,7 @@ struct LambdaExecuteInfo final : public FunctionLocalState {
 	//! True, if this lambda expression expects an index vector in the input chunk
 	bool has_index;
 	//! Added to child_idx to form the value the lambda sees in its index parameter (1 by default).
-	idx_t index_offset = 1;
+	idx_t index_offset;
 	Vector index_vector;
 	SelectionVector child_sel;
 	SelectionVector row_sel;
@@ -242,7 +237,7 @@ unique_ptr<FunctionLocalState> LambdaFunctions::ListLambdaInitLocalState(Express
 	if (!info.lambda_expr) {
 		return nullptr;
 	}
-	return make_uniq<LambdaExecuteInfo>(state.GetContext(), *info.lambda_expr, expr, info.has_index);
+	return make_uniq<LambdaExecuteInfo>(state, info, expr);
 }
 
 static void SliceBatchInput(Vector &target, Vector &source, const bool consecutive, const idx_t first,
@@ -298,6 +293,7 @@ void ListLambdaBindData::Serialize(Serializer &serializer, const optional_ptr<Fu
 	serializer.WritePropertyWithDefault(101, "lambda_expr", bind_data.lambda_expr, shared_ptr<Expression>());
 	serializer.WriteProperty(102, "has_index", bind_data.has_index);
 	serializer.WritePropertyWithDefault<bool>(103, "has_initial", bind_data.has_initial, false);
+	serializer.WritePropertyWithDefault<idx_t>(16488, "index_offset", bind_data.index_offset, 1);
 }
 
 unique_ptr<FunctionData> ListLambdaBindData::Deserialize(Deserializer &deserializer, BoundScalarFunction &) {
@@ -306,7 +302,8 @@ unique_ptr<FunctionData> ListLambdaBindData::Deserialize(Deserializer &deseriali
 	                                                                                        unique_ptr<Expression>());
 	auto has_index = deserializer.ReadProperty<bool>(102, "has_index");
 	auto has_initial = deserializer.ReadPropertyWithExplicitDefault<bool>(103, "has_initial", false);
-	return make_uniq<ListLambdaBindData>(return_type, std::move(lambda_expr), has_index, has_initial);
+	auto index_offset = deserializer.ReadPropertyWithExplicitDefault<idx_t>(16488, "index_offset", 1);
+	return make_uniq<ListLambdaBindData>(return_type, std::move(lambda_expr), has_index, has_initial, index_offset);
 }
 
 //===--------------------------------------------------------------------===//
@@ -480,8 +477,10 @@ unique_ptr<FunctionData> LambdaFunctions::ListLambdaBind(ClientContext &context,
 	}
 
 	auto &bound_lambda_expr = arguments[1]->Cast<BoundLambdaExpression>();
-	auto lambda_bind_data =
-	    make_uniq<ListLambdaBindData>(bound_function.GetReturnType(), bound_lambda_expr.SharedLambdaExpr(), has_index);
+	const idx_t index_offset =
+	    Settings::Get<DialectCompatibilityModeSetting>(context) == DialectCompatibilityMode::SPARK ? 0 : 1;
+	auto lambda_bind_data = make_uniq<ListLambdaBindData>(
+	    bound_function.GetReturnType(), bound_lambda_expr.SharedLambdaExpr(), has_index, false, index_offset);
 	if (lambda_bind_data->is_volatile) {
 		bound_function.SetVolatile();
 	}

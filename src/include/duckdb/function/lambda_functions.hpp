@@ -35,9 +35,9 @@ struct LambdaFunctionData : public FunctionData {
 struct ListLambdaBindData final : public LambdaFunctionData {
 public:
 	ListLambdaBindData(const LogicalType &return_type, shared_ptr<Expression> lambda_expr, const bool has_index = false,
-	                   const bool has_initial = false)
+	                   const bool has_initial = false, const idx_t index_offset = 1)
 	    : return_type(return_type), lambda_expr(std::move(lambda_expr)), has_index(has_index), has_initial(has_initial),
-	      is_volatile(this->lambda_expr && this->lambda_expr->IsVolatile()) {};
+	      index_offset(index_offset), is_volatile(this->lambda_expr && this->lambda_expr->IsVolatile()) {};
 
 	//! Return type of the scalar function
 	LogicalType return_type;
@@ -46,6 +46,7 @@ public:
 	//! True, if the last parameter in a lambda parameter list represents the index of the current list element
 	bool has_index;
 	bool has_initial;
+	idx_t index_offset;
 	bool is_volatile;
 
 public:
@@ -56,7 +57,7 @@ public:
 	bool Equals(const FunctionData &other_p) const override {
 		auto &other = other_p.Cast<ListLambdaBindData>();
 		return LambdaExpressionEquals(lambda_expr, other.lambda_expr) && return_type == other.return_type &&
-		       has_index == other.has_index && has_initial == other.has_initial;
+		       has_index == other.has_index && has_initial == other.has_initial && index_offset == other.index_offset;
 	}
 
 	//! Serializes a lambda function's bind data

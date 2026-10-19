@@ -259,8 +259,8 @@ unique_ptr<Expression> BuildListComprehensionRewrite(ClientContext &context, Lis
 			break;
 		}
 	}
-	auto filter_bind_info =
-	    make_uniq<ListLambdaBindData>(filter_return_type, std::move(filter_lambda), inner_bind.has_index);
+	auto filter_bind_info = make_uniq<ListLambdaBindData>(filter_return_type, std::move(filter_lambda),
+	                                                      inner_bind.has_index, false, inner_bind.index_offset);
 
 	auto new_func = list_filter_expr.Function();
 	new_func.SetReturnType(filter_return_type);

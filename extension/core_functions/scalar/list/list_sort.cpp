@@ -156,8 +156,8 @@ static bool ListSortLess(const ListSortEntry &l, const ListSortEntry &r, const v
 }
 
 struct ListSortLocalState : public FunctionLocalState {
-	ListSortLocalState(ClientContext &context, const ListSortBindData &info)
-	    : key_is_element(info.sort_key->GetExpressionClass() == ExpressionClass::BOUND_REF), key_executor(context) {
+	ListSortLocalState(ExpressionState &state, const ListSortBindData &info)
+	    : key_is_element(info.sort_key->GetExpressionClass() == ExpressionClass::BOUND_REF), key_executor(state) {
 		if (!key_is_element) {
 			key_executor.AddExpression(*info.sort_key);
 			key_input.InitializeEmpty(info.types);
@@ -176,7 +176,7 @@ struct ListSortLocalState : public FunctionLocalState {
 
 static unique_ptr<FunctionLocalState>
 ListSortInitLocalState(ExpressionState &state, const BoundFunctionExpression &expr, FunctionData *bind_data) {
-	return make_uniq<ListSortLocalState>(state.GetContext(), bind_data->Cast<ListSortBindData>());
+	return make_uniq<ListSortLocalState>(state, bind_data->Cast<ListSortBindData>());
 }
 
 static void CreateListSortKeys(ListSortLocalState &lstate, const ListSortBindData &info, const Vector &child) {

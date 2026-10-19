@@ -28,6 +28,8 @@ public:
 	DUCKDB_API ExpressionExecutor(ClientContext &context, const Expression *expression);
 	DUCKDB_API ExpressionExecutor(ClientContext &context, const Expression &expression);
 	DUCKDB_API ExpressionExecutor(ClientContext &context, const vector<unique_ptr<Expression>> &expressions);
+	DUCKDB_API explicit ExpressionExecutor(ExpressionState &parent);
+	DUCKDB_API ExpressionExecutor(ExpressionState &parent, const Expression &expression);
 	ExpressionExecutor(ExpressionExecutor &&) = delete;
 
 	static constexpr idx_t MAX_FOLDED_VALUE_SIZE = 1 << 22;
@@ -50,6 +52,7 @@ public:
 
 	//! Execute the set of expressions with the given input chunk and store the result in the output chunk
 	DUCKDB_API void Execute(DataChunk *input, DataChunk &result);
+	DUCKDB_API void Execute(ClientContext &context, DataChunk &input, DataChunk &result);
 	inline void Execute(DataChunk &input, DataChunk &result) {
 		Execute(&input, result);
 	}
@@ -162,6 +165,7 @@ protected:
 private:
 	//! Client context
 	optional_ptr<ClientContext> context;
+	optional_ptr<ExpressionExecutor> parent;
 	//! The states of the expression executor; this holds any intermediates and temporary states of expressions
 	vector<unique_ptr<ExpressionExecutorState>> states;
 	//! The vector verification (debug setting)
@@ -171,5 +175,7 @@ private:
 	// it is possible to create an expression executor without a ClientContext - but it should be avoided
 	DUCKDB_API ExpressionExecutor();
 	DUCKDB_API explicit ExpressionExecutor(const vector<unique_ptr<Expression>> &exprs);
+
+	ExpressionState *RootState(idx_t expr_idx);
 };
 } // namespace duckdb

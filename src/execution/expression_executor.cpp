@@ -1,5 +1,7 @@
 #include "duckdb/execution/expression_executor.hpp"
 
+#include <absl/cleanup/cleanup.h>
+
 #include "duckdb/common/vector/array_vector.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector/list_vector.hpp"
@@ -40,6 +42,15 @@ ExpressionExecutor::ExpressionExecutor(ClientContext &context, const vector<uniq
 	}
 }
 
+ExpressionExecutor::ExpressionExecutor(ExpressionState &parent_p)
+    : parent(parent_p.root.executor), debug_vector_verification(parent->debug_vector_verification) {
+}
+
+ExpressionExecutor::ExpressionExecutor(ExpressionState &parent_p, const Expression &expression)
+    : ExpressionExecutor(parent_p) {
+	AddExpression(expression);
+}
+
 ExpressionExecutor::ExpressionExecutor(const vector<unique_ptr<Expression>> &exprs) : context(nullptr) {
 	D_ASSERT(exprs.size() > 0);
 	for (auto &expr : exprs) {
@@ -51,30 +62,41 @@ ExpressionExecutor::ExpressionExecutor() : context(nullptr) {
 }
 
 bool ExpressionExecutor::HasContext() {
-	return context;
+	return GetContextPtr();
 }
 
 ClientContext &ExpressionExecutor::GetContext() {
-	if (!context) {
+	auto result = GetContextPtr();
+	if (!result) {
 		throw InternalException("Calling ExpressionExecutor::GetContext on an expression executor without a context");
 	}
-	return *context;
+	return *result;
 }
 
 optional_ptr<ClientContext> ExpressionExecutor::GetContextPtr() {
-	return context;
+	return context || !parent ? context : parent->GetContextPtr();
 }
 
 Allocator &ExpressionExecutor::GetAllocator() {
-	return context ? Allocator::Get(*context) : Allocator::DefaultAllocator();
+	auto client = GetContextPtr();
+	return client ? Allocator::Get(*client) : Allocator::DefaultAllocator();
 }
 
 void ExpressionExecutor::AddExpression(const Expression &expr) {
 	expressions.push_back(&expr);
-	auto state = make_uniq<ExpressionExecutorState>();
-	Initialize(expr, *state);
-	state->Verify();
-	states.push_back(std::move(state));
+	states.push_back(make_uniq<ExpressionExecutorState>());
+	if (HasContext()) {
+		RootState(states.size() - 1);
+	}
+}
+
+ExpressionState *ExpressionExecutor::RootState(idx_t expr_idx) {
+	auto &state = *states[expr_idx];
+	if (!state.root_state) {
+		Initialize(*expressions[expr_idx], state);
+		state.Verify();
+	}
+	return state.root_state.get();
 }
 
 void ExpressionExecutor::ClearExpressions() {
@@ -96,7 +118,16 @@ void ExpressionExecutor::Execute(DataChunk *input, DataChunk &result) {
 		ExecuteExpression(i, result.data[i]);
 	}
 	result.SetChildCardinality(input ? input->size() : 1);
-	result.Verify(context);
+	result.Verify(GetContextPtr());
+}
+
+void ExpressionExecutor::Execute(ClientContext &context_p, DataChunk &input, DataChunk &result) {
+	D_ASSERT(!context && !parent);
+	context = &context_p;
+	absl::Cleanup reset = [this]() noexcept {
+		context = nullptr;
+	};
+	Execute(&input, result);
 }
 
 void ExpressionExecutor::ExecuteExpression(DataChunk &input, Vector &result) {
@@ -108,9 +139,8 @@ void ExpressionExecutor::ExecuteExpression(DataChunk &input, Vector &result, con
 	SetChunk(&input);
 	D_ASSERT(!expressions.empty());
 	auto &expression = expressions[0];
-	auto &state = states[0];
 	D_ASSERT(result.GetType().id() == expression->GetReturnType().id());
-	Execute(*expression, state->root_state.get(), &sel, count, result);
+	Execute(*expression, RootState(0), &sel, count, result);
 }
 
 idx_t ExpressionExecutor::SelectExpression(DataChunk &input, SelectionVector &sel) {
@@ -128,8 +158,8 @@ idx_t ExpressionExecutor::SelectExpression(DataChunk &input, optional_ptr<Select
 	D_ASSERT(expressions.size() == 1);
 	D_ASSERT(current_count <= input.size());
 	SetChunk(&input);
-	idx_t selected_tuples = Select(*expressions[0], states[0]->root_state.get(), current_sel.get(), current_count,
-	                               true_sel.get(), false_sel.get());
+	idx_t selected_tuples =
+	    Select(*expressions[0], RootState(0), current_sel.get(), current_count, true_sel.get(), false_sel.get());
 	return selected_tuples;
 }
 
@@ -141,7 +171,7 @@ void ExpressionExecutor::ExecuteExpression(Vector &result) {
 void ExpressionExecutor::ExecuteExpression(idx_t expr_idx, Vector &result) {
 	D_ASSERT(expr_idx < expressions.size());
 	D_ASSERT(result.GetType().id() == expressions[expr_idx]->GetReturnType().id());
-	Execute(*expressions[expr_idx], states[expr_idx]->root_state.get(), nullptr, chunk ? chunk->size() : 1, result);
+	Execute(*expressions[expr_idx], RootState(expr_idx), nullptr, chunk ? chunk->size() : 1, result);
 }
 
 static bool TryFoldNestedValue(ClientContext &context, const Expression &expr, Value &result) {

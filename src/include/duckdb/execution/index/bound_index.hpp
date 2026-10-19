@@ -220,6 +220,7 @@ public:
 
 	//! Execute the index expressions on an input chunk
 	void ExecuteExpressions(DataChunk &input, DataChunk &result) const;
+	void ExecuteExpressions(ClientContext &context, DataChunk &input, DataChunk &result) const;
 	static string AppendRowError(DataChunk &input, idx_t index);
 
 	//! Throw a constraint violation exception
