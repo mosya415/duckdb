@@ -576,8 +576,8 @@ static void DropIndexesOnRemovedColumn(DuckSchemaEntry &schema, CatalogTransacti
 	}
 }
 
-static vector<LogicalDependency> SequencesOwnedByRemovedColumn(CatalogTransaction transaction, CatalogSet &tables,
-                                                               const Identifier &table_name,
+static vector<LogicalDependency> SequencesOwnedByRemovedColumn(Catalog &catalog, CatalogTransaction transaction,
+                                                               CatalogSet &tables, const Identifier &table_name,
                                                                const RemoveColumnInfo &info) {
 	vector<LogicalDependency> owned;
 	auto entry = tables.GetEntry(transaction, table_name);
@@ -588,11 +588,12 @@ static vector<LogicalDependency> SequencesOwnedByRemovedColumn(CatalogTransactio
 	if (!table.ColumnExists(info.removed_column)) {
 		return owned;
 	}
-	const SubDependency default_of {AlterTableType::SET_DEFAULT, table.GetColumn(info.removed_column).Name()};
-	for (auto &dependency : table.dependencies.Set()) {
-		if (dependency.owned_by && dependency.entry.type == CatalogType::SEQUENCE_ENTRY &&
-		    dependency.subdependencies.contains(default_of)) {
-			owned.push_back(dependency);
+	const auto column = table.GetColumn(info.removed_column).CatalogOid();
+	for (auto &owned_entry : catalog.GetDependencyManager()->OwnedEntries(transaction, table)) {
+		auto &sequence = owned_entry.get();
+		if (sequence.type == CatalogType::SEQUENCE_ENTRY &&
+		    sequence.Cast<SequenceCatalogEntry>().owner_column == optional_idx(column)) {
+			owned.emplace_back(sequence);
 		}
 	}
 	return owned;
@@ -663,7 +664,8 @@ void DuckSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
 		    info.Cast<AlterTableInfo>().alter_table_type == AlterTableType::REMOVE_COLUMN &&
 		    catalog.Compatibility() == SqlCompatibility::POSTGRES && transaction.HasContext()) {
 			DropIndexesOnRemovedColumn(*this, transaction, set, name, info.Cast<RemoveColumnInfo>());
-			owned_sequences = SequencesOwnedByRemovedColumn(transaction, set, name, info.Cast<RemoveColumnInfo>());
+			owned_sequences =
+			    SequencesOwnedByRemovedColumn(catalog, transaction, set, name, info.Cast<RemoveColumnInfo>());
 		}
 		auto previous =
 		    type == CatalogType::TABLE_ENTRY && transaction.transaction ? set.GetEntry(transaction, name) : nullptr;
@@ -685,18 +687,18 @@ void DuckSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) {
 				ReownOwnedSequences(catalog, transaction, *table, info.Cast<AlterPermissionsInfo>());
 			}
 		}
-		auto altered = owned_sequences.empty() ? nullptr : set.GetEntry(transaction, name);
 		for (auto &owned : owned_sequences) {
 			auto sequence = catalog.GetDependencyManager()->LookupEntry(transaction, owned);
-			if (!sequence || !altered) {
+			if (!sequence) {
 				continue;
 			}
-			catalog.GetDependencyManager()->RemoveDependencyBetween(transaction, *altered, *sequence);
+			catalog.GetDependencyManager()->RemoveOwnership(transaction, *sequence);
 			auto &owner_schema = sequence->ParentSchema(transaction);
 			DropInfo drop;
 			drop.type = CatalogType::SEQUENCE_ENTRY;
 			drop.SetQualifiedName(owner_schema.GetQualifiedName(sequence->name));
 			drop.if_not_found = OnEntryNotFound::RETURN_NULL;
+			drop.cascade = info.Cast<RemoveColumnInfo>().cascade;
 			owner_schema.DropEntry(transaction.GetContext(), drop);
 		}
 		// Detaching a foreign-key pair must also remove the dependency edge
