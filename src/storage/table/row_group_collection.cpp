@@ -2450,7 +2450,7 @@ void RowGroupCollection::VerifyNewConstraint(const QueryContext &context, DuckTr
 		                                      VisibilityBound::Through(transaction_manager.GetLastCommit()));
 		ScanOptions scan_options(constraint_visibility);
 		scan_options.insert_type = InsertedScanType::ALL_ROWS;
-		scan_options.update_type = UpdateScanType::DISALLOW_UPDATES;
+		scan_options.update_type = UpdateScanType::ALLOW_OWN_UPDATES;
 		ExpressionExecutor executor(client, *check.expression);
 		Vector result(LogicalType::INTEGER);
 		while (true) {
@@ -2495,7 +2495,7 @@ void RowGroupCollection::VerifyNewConstraint(const QueryContext &context, DuckTr
 	                                      VisibilityBound::Through(transaction_manager.GetLastCommit()));
 	ScanOptions scan_options(constraint_visibility);
 	scan_options.insert_type = InsertedScanType::ALL_ROWS;
-	scan_options.update_type = UpdateScanType::DISALLOW_UPDATES;
+	scan_options.update_type = UpdateScanType::ALLOW_OWN_UPDATES;
 	while (true) {
 		scan_chunk.Reset();
 		state.table_state.Scan(scan_options, scan_chunk, state.segment_lock);
