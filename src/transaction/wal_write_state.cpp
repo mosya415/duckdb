@@ -144,6 +144,9 @@ void WALWriteState::WriteCatalogEntry(CatalogEntry &entry, data_ptr_t dataptr) {
 		parse_info->Cast<AlterInfo>().oid = parent.oid;
 	}
 	auto alter_info = parse_info ? &parse_info->Cast<AlterInfo>() : nullptr;
+	if (parent.type == CatalogType::INDEX_ENTRY && alter_info && alter_info->type == AlterType::REPLACE_DEFINITION) {
+		return;
+	}
 	if (!catalog_run) {
 		WriteCatalogEntry(Log(), entry, alter_info, true);
 		return;

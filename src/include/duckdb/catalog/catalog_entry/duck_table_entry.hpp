@@ -69,6 +69,7 @@ public:
 	unique_ptr<CatalogEntry> Copy(ClientContext &context) const override;
 
 	void SetAsRoot(optional_ptr<CatalogTransaction> transaction, optional_ptr<CatalogEntry> previous) override;
+	void AlterDependentIndexes(CatalogTransaction transaction, DuckTableEntry &previous);
 	void ReplaceStorage(DuckTableEntry &source);
 	static vector<idx_t> SyncIndexColumnLayout(DataTableInfo &info, const ColumnList &columns,
 	                                           vector<idx_t> &logical_oids);

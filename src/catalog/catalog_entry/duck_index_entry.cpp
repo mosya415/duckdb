@@ -2,6 +2,8 @@
 
 #include "duckdb/catalog/catalog_entry/duck_table_entry.hpp"
 #include "duckdb/catalog/duck_catalog.hpp"
+#include "duckdb/parser/parsed_data/alter_table_info.hpp"
+#include "duckdb/parser/parsed_data/create_index_info.hpp"
 #include "duckdb/storage/data_table.hpp"
 #include "duckdb/storage/table/data_table_info.hpp"
 #include "duckdb/transaction/commit_state.hpp"
@@ -48,6 +50,27 @@ unique_ptr<CatalogEntry> DuckIndexEntry::Copy(ClientContext &context) const {
 	result->initial_index_size = initial_index_size;
 
 	return std::move(result);
+}
+
+unique_ptr<CatalogEntry> DuckIndexEntry::AlterEntry(CatalogTransaction transaction, AlterInfo &info) {
+	if (info.type != AlterType::REPLACE_DEFINITION) {
+		return IndexCatalogEntry::AlterEntry(transaction, info);
+	}
+	auto &definition = info.Cast<ReplaceDefinitionInfo>().definition->Cast<CreateIndexInfo>();
+	auto result = Copy(transaction.GetContext());
+	auto &index = result->Cast<DuckIndexEntry>();
+	index.sql = definition.sql;
+	index.column_ids = definition.column_ids;
+	index.dependencies = definition.dependencies;
+	index.expressions.clear();
+	for (auto &expr : definition.expressions) {
+		index.expressions.push_back(expr->Copy());
+	}
+	index.parsed_expressions.clear();
+	for (auto &expr : definition.parsed_expressions) {
+		index.parsed_expressions.push_back(expr->Copy());
+	}
+	return result;
 }
 
 Identifier DuckIndexEntry::GetSchemaName() const {

@@ -357,41 +357,20 @@ unique_ptr<CatalogEntry> DuckTableEntry::AlterEntry(CatalogTransaction transacti
 	return AddForeignKeyConstraint(transaction, foreign_key_constraint_info);
 }
 
-// The indexes over a table keep the table and its columns by name: in their key expressions, in their
-// dependency list and in the CREATE INDEX SQL. All three are read back when the database is loaded, so a
-// rename has to reach them as well - otherwise the index only resolves until the next restart.
-static void UpdateDependentIndexes(CatalogTransaction transaction, DuckTableEntry &table,
-                                   const std::function<void(DuckIndexEntry &)> &update) {
-	auto &data_table_info = table.GetStorage().GetDataTableInfo();
-	auto &schema = table.ParentSchema(transaction).Cast<DuckSchemaEntry>();
-	schema.GetCatalogSet(CatalogType::INDEX_ENTRY).Scan(transaction, [&](CatalogEntry &entry) {
-		auto &index = entry.Cast<DuckIndexEntry>();
-		if (index.info && index.info->info && RefersToSameObject(index.GetDataTableInfo(), *data_table_info)) {
-			update(index);
-			index.sql = index.GetInfo()->ToString();
-		}
-	});
-}
-
-static void RewriteIndexExpressions(DuckIndexEntry &index, const std::function<void(ParsedExpression &)> &rewrite) {
-	for (auto &expr : index.expressions) {
-		rewrite(*expr);
-	}
-	for (auto &expr : index.parsed_expressions) {
-		rewrite(*expr);
-	}
-}
-
-static void RewriteIndexDependencies(DuckIndexEntry &index, const Identifier &old_name, const Identifier &new_name) {
+static bool RewriteIndexDependencies(LogicalDependencyList &dependencies, const Identifier &old_name,
+                                     const Identifier &new_name) {
+	bool changed = false;
 	LogicalDependencyList updated;
-	for (auto &dependency : index.dependencies.Set()) {
+	for (auto &dependency : dependencies.Set()) {
 		auto renamed = dependency;
 		if (renamed.entry.type == CatalogType::TABLE_ENTRY && renamed.entry.name == old_name) {
 			renamed.entry.name = new_name;
+			changed = true;
 		}
 		updated.AddDependency(renamed);
 	}
-	index.dependencies = std::move(updated);
+	dependencies = std::move(updated);
+	return changed;
 }
 
 static string NotSupportedForTables(const Catalog &catalog) {
@@ -1669,67 +1648,103 @@ void DuckTableEntry::SetAsRoot(optional_ptr<CatalogTransaction> transaction, opt
 			storage->SetColumnName(column.Physical(), column.Name());
 		}
 	}
-	optional_ptr<DuckTableEntry> previous_table;
-	if (previous && previous->type == CatalogType::TABLE_ENTRY) {
-		previous_table = &previous->Cast<DuckTableEntry>();
-	}
-	IdentifierEquality same(columns.IsCaseSensitive());
-	auto previous_name = previous_table ? previous_table->name : name;
-	auto renamed_columns =
-	    previous_table ? RenamedColumns(previous_table->columns, columns) : vector<pair<Identifier, Identifier>>();
 	vector<idx_t> logical_oids;
-	auto previous_logical_oids = SyncIndexColumnLayout(*storage->GetDataTableInfo(), columns, logical_oids);
+	SyncIndexColumnLayout(*storage->GetDataTableInfo(), columns, logical_oids);
 	if (!transaction) {
 		return;
-	}
-	if (!previous_logical_oids.empty() && previous_logical_oids != logical_oids) {
-		unordered_map<idx_t, column_t> positions;
-		for (idx_t i = 0; i < logical_oids.size(); i++) {
-			positions.emplace(logical_oids[i], i);
-		}
-		auto &index_types = catalog.GetDatabase().config.GetIndexTypes();
-		UpdateDependentIndexes(*transaction, *this, [&](DuckIndexEntry &index) {
-			auto index_type = index_types.FindByName(index.index_type);
-			if (!index_type || !index_type->remaps_columns) {
-				return;
-			}
-			for (auto &column_id : index.column_ids) {
-				if (column_id >= previous_logical_oids.size()) {
-					continue;
-				}
-				auto position = positions.find(previous_logical_oids[column_id]);
-				if (position != positions.end()) {
-					column_id = position->second;
-				}
-			}
-		});
-	}
-	if (!same(previous_name, name) || !renamed_columns.empty()) {
-		UpdateDependentIndexes(*transaction, *this, [&](DuckIndexEntry &index) {
-			RewriteIndexExpressions(index, [&](ParsedExpression &expr) {
-				ParsedExpressionIterator::VisitExpressionMutable<ColumnRefExpression>(
-				    expr, [&](ColumnRefExpression &colref) {
-					    auto &names = colref.ColumnNamesMutable();
-					    for (idx_t i = 0; i + 1 < names.size(); i++) {
-						    if (same(names[i], previous_name)) {
-							    names[i] = name;
-						    }
-					    }
-					    for (auto &renamed : renamed_columns) {
-						    if (same(names.back(), renamed.first)) {
-							    names.back() = renamed.second;
-						    }
-					    }
-				    });
-			});
-			RewriteIndexDependencies(index, previous_name, name);
-		});
 	}
 	if (transaction->context) {
 		auto lstorage = LocalStorage::Get(*transaction->context, storage->db).GetStorage(*storage);
 		if (lstorage) {
 			lstorage->table_entry = this;
 		}
+	}
+}
+
+void DuckTableEntry::AlterDependentIndexes(CatalogTransaction transaction, DuckTableEntry &previous) {
+	IdentifierEquality same(columns.IsCaseSensitive());
+	const bool renamed_table = !same(previous.name, name);
+	auto renamed_columns = RenamedColumns(previous.columns, columns);
+	vector<idx_t> previous_oids;
+	for (auto &column : previous.columns.Logical()) {
+		previous_oids.push_back(column.CatalogOid());
+	}
+	vector<idx_t> oids;
+	for (auto &column : columns.Logical()) {
+		oids.push_back(column.CatalogOid());
+	}
+	const bool moved = previous_oids != oids;
+	if (!renamed_table && renamed_columns.empty() && !moved) {
+		return;
+	}
+	unordered_map<idx_t, column_t> positions;
+	for (idx_t i = 0; i < oids.size(); i++) {
+		positions.emplace(oids[i], i);
+	}
+	auto rename = [&](ParsedExpression &expr) {
+		bool changed = false;
+		ParsedExpressionIterator::VisitExpressionMutable<ColumnRefExpression>(expr, [&](ColumnRefExpression &colref) {
+			auto &names = colref.ColumnNamesMutable();
+			for (idx_t i = 0; i + 1 < names.size(); i++) {
+				if (renamed_table && same(names[i], previous.name)) {
+					names[i] = name;
+					changed = true;
+				}
+			}
+			for (auto &renamed : renamed_columns) {
+				if (same(names.back(), renamed.first)) {
+					names.back() = renamed.second;
+					changed = true;
+					break;
+				}
+			}
+		});
+		return changed;
+	};
+	auto &index_types = catalog.GetDatabase().config.GetIndexTypes();
+	auto &data_table_info = storage->GetDataTableInfo();
+	auto &indexes = ParentSchema(transaction).Cast<DuckSchemaEntry>().GetCatalogSet(CatalogType::INDEX_ENTRY);
+	vector<pair<Identifier, unique_ptr<CreateInfo>>> definitions;
+	indexes.Scan(transaction, [&](CatalogEntry &entry) {
+		auto &index = entry.Cast<DuckIndexEntry>();
+		if (!index.info || !index.info->info || !RefersToSameObject(index.GetDataTableInfo(), *data_table_info)) {
+			return;
+		}
+		auto definition = index.GetInfo();
+		auto &index_info = definition->Cast<CreateIndexInfo>();
+		bool changed = false;
+		auto index_type = index_types.FindByName(index.index_type);
+		if (moved && index_type && index_type->remaps_columns) {
+			for (auto &column_id : index_info.column_ids) {
+				if (column_id >= previous_oids.size()) {
+					continue;
+				}
+				auto position = positions.find(previous_oids[column_id]);
+				if (position != positions.end() && position->second != column_id) {
+					column_id = position->second;
+					changed = true;
+				}
+			}
+		}
+		for (auto &expr : index_info.expressions) {
+			changed |= rename(*expr);
+		}
+		for (auto &expr : index_info.parsed_expressions) {
+			changed |= rename(*expr);
+		}
+		if (renamed_table) {
+			changed |= RewriteIndexDependencies(index_info.dependencies, previous.name, name);
+		}
+		if (!changed) {
+			return;
+		}
+		index_info.sql = definition->ToString();
+		definitions.emplace_back(index.name, std::move(definition));
+	});
+	for (auto &definition : definitions) {
+		ReplaceDefinitionInfo replace(std::move(definition.second));
+		replace.allow_internal = true;
+		indexes.AlterEntry(transaction, definition.first, replace);
 	}
 }
 
