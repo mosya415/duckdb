@@ -82,6 +82,7 @@ public:
 	virtual unique_ptr<CatalogEntry> Copy(ClientContext &context) const;
 
 	virtual unique_ptr<CreateInfo> GetInfo() const;
+	virtual unique_ptr<CreateInfo> GetInfo(CatalogTransaction transaction) const;
 	unique_ptr<CreateInfo> GetSerializedInfo() const;
 
 	//! Sets the CatalogEntry as the new root entry (i.e. the newest entry)

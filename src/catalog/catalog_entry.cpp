@@ -66,6 +66,10 @@ unique_ptr<CreateInfo> CatalogEntry::GetInfo() const {
 	throw InternalException("Unsupported type for CatalogEntry::GetInfo!");
 }
 
+unique_ptr<CreateInfo> CatalogEntry::GetInfo(CatalogTransaction transaction) const {
+	return GetInfo();
+}
+
 string CatalogEntry::ToSQL() const {
 	throw InternalException({{"catalog_type", CatalogTypeToString(type)}}, "Unsupported catalog type for ToSQL()");
 }
