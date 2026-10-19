@@ -318,6 +318,16 @@ ErrorData MetaTransaction::CommitThroughCatalogLog(Catalog &catalog) {
 				dependencies.VerifyForeignSubjects(prepared.foreign_dependencies);
 				dependencies.VerifyForeignDependents(prepared.drop_state.DroppedEntries());
 			}
+			vector<CatalogRun> runs;
+			for (auto &participant : participants) {
+				auto &transaction = participant.get().transaction;
+				auto duck_transaction = PreparedParticipant(transaction);
+				if (duck_transaction) {
+					runs.push_back(
+					    CatalogRun {transaction.manager.GetDB().oid, duck_transaction->prepared->catalog_run});
+				}
+			}
+			WALWriteState::WriteCatalogRuns(catalog_log, runs);
 			for (auto &participant : participants) {
 				auto &transaction = participant.get().transaction;
 				auto duck_transaction = PreparedParticipant(transaction);
@@ -325,7 +335,6 @@ ErrorData MetaTransaction::CommitThroughCatalogLog(Catalog &catalog) {
 					continue;
 				}
 				auto &db = transaction.manager.GetDB();
-				WALWriteState::WriteCatalogRun(catalog_log, db.oid, duck_transaction->prepared->catalog_run);
 				if (db.GetCatalog().UsesCatalogLog()) {
 					duck_transaction->prepared->sequences = duck_transaction->ReserveSequenceUsage(catalog_log);
 					duck_transaction->WriteReplicationLsns(catalog_log);

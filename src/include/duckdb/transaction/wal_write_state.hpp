@@ -30,12 +30,12 @@ public:
 
 public:
 	void CommitEntry(UndoFlags type, data_ptr_t data);
-	static void WriteCatalogRun(WriteAheadLog &catalog_log, idx_t catalog_oid, const vector<CatalogRunEntry> &run);
+	static void WriteCatalogRuns(WriteAheadLog &catalog_log, const vector<CatalogRun> &runs);
 
 private:
 	void SwitchTable(DuckTableEntry &table_entry, UndoFlags new_op);
 
-	void WriteCatalogEntry(CatalogEntry &entry, data_ptr_t extra_data);
+	void WriteCatalogEntry(CatalogEntry &entry, idx_t change, data_ptr_t extra_data);
 	static void WriteCatalogEntry(WriteAheadLog &target, CatalogEntry &entry, const AlterInfo *alter_info,
 	                              bool with_index_storage);
 	void WriteDelete(DeleteInfo &info);

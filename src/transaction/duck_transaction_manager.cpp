@@ -1172,7 +1172,7 @@ void DuckTransactionManager::PushCatalogEntry(Transaction &transaction_p, duckdb
 		                        "this should not be possible");
 	}
 	transaction.catalog_version = ++last_uncommitted_catalog_version;
-	transaction.PushCatalogEntry(entry, extra_data, extra_data_size);
+	transaction.PushCatalogEntry(entry, DatabaseManager::Get(db).NextCatalogChange(), extra_data, extra_data_size);
 }
 
 void DuckTransactionManager::PushAttach(Transaction &transaction_p, AttachedDatabase &attached_db) {

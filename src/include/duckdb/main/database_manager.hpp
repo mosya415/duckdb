@@ -138,6 +138,9 @@ public:
 		}
 		return oid;
 	}
+	idx_t NextCatalogChange() {
+		return next_catalog_change.fetch_add(1, std::memory_order_relaxed);
+	}
 	void CommitPrepared(const hugeint_t &txid, vector<pair<idx_t, idx_t>> participants);
 	bool IsPreparedCommitted(const hugeint_t &txid);
 	void RetainPrepared(const std::function<bool(const hugeint_t &, const vector<pair<idx_t, idx_t>> &)> &keep);
@@ -169,6 +172,7 @@ private:
 	Identifier default_database;
 	//! The next object id handed out by the NextOid method
 	atomic<idx_t> next_oid;
+	atomic<idx_t> next_catalog_change {0};
 	mutex committed_prepared_lock;
 	map<hugeint_t, vector<pair<idx_t, idx_t>>> committed_prepared;
 	//! The current query number

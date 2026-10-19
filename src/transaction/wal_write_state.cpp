@@ -24,8 +24,11 @@
 #include "duckdb/storage/write_ahead_log.hpp"
 #include "duckdb/transaction/append_info.hpp"
 #include "duckdb/transaction/delete_info.hpp"
+#include "duckdb/transaction/duck_transaction.hpp"
 #include "duckdb/transaction/transaction_manager.hpp"
 #include "duckdb/transaction/update_info.hpp"
+
+#include <absl/algorithm/container.h>
 
 namespace duckdb {
 
@@ -123,7 +126,7 @@ static bool ChangesTableStorage(CatalogEntry &entry, const AlterInfo *alter_info
 	}
 }
 
-void WALWriteState::WriteCatalogEntry(CatalogEntry &entry, data_ptr_t dataptr) {
+void WALWriteState::WriteCatalogEntry(CatalogEntry &entry, idx_t change, data_ptr_t dataptr) {
 	if (entry.temporary || entry.Parent().temporary) {
 		return;
 	}
@@ -167,15 +170,28 @@ void WALWriteState::WriteCatalogEntry(CatalogEntry &entry, data_ptr_t dataptr) {
 			}
 		}
 	}
-	catalog_run->emplace_back(entry, std::move(parse_info));
+	catalog_run->emplace_back(entry, change, std::move(parse_info));
 }
 
-void WALWriteState::WriteCatalogRun(WriteAheadLog &catalog_log, idx_t catalog_oid, const vector<CatalogRunEntry> &run) {
-	if (run.empty()) {
-		return;
+void WALWriteState::WriteCatalogRuns(WriteAheadLog &catalog_log, const vector<CatalogRun> &runs) {
+	struct Change {
+		idx_t catalog_oid;
+		reference<const CatalogRunEntry> entry;
+	};
+	vector<Change> changes;
+	for (auto &run : runs) {
+		for (auto &run_entry : run.entries.get()) {
+			changes.push_back(Change {run.catalog_oid, run_entry});
+		}
 	}
-	catalog_log.WriteUseCatalog(catalog_oid);
-	for (auto &run_entry : run) {
+	absl::c_sort(changes, [](const Change &a, const Change &b) { return a.entry.get().change < b.entry.get().change; });
+	optional_idx catalog_oid;
+	for (auto &change : changes) {
+		if (!catalog_oid.IsValid() || catalog_oid.GetIndex() != change.catalog_oid) {
+			catalog_oid = change.catalog_oid;
+			catalog_log.WriteUseCatalog(change.catalog_oid);
+		}
+		auto &run_entry = change.entry.get();
 		auto alter_info = run_entry.alter_info ? &run_entry.alter_info->Cast<AlterInfo>() : nullptr;
 		WriteCatalogEntry(catalog_log, run_entry.entry, alter_info, false);
 	}
@@ -439,7 +455,8 @@ void WALWriteState::CommitEntry(UndoFlags type, data_ptr_t data) {
 		auto catalog_entry = Load<CatalogEntry *>(data);
 		D_ASSERT(catalog_entry->HasParent());
 		// push the catalog update to the WAL
-		WriteCatalogEntry(*catalog_entry, data + sizeof(CatalogEntry *));
+		WriteCatalogEntry(*catalog_entry, Load<idx_t>(data + sizeof(CatalogEntry *)),
+		                  data + DuckTransaction::CATALOG_UNDO_HEADER);
 		break;
 	}
 	case UndoFlags::INSERT_TUPLE: {

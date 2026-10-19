@@ -81,8 +81,9 @@ LocalStorage &DuckTransaction::GetLocalStorage() {
 	return *storage;
 }
 
-void DuckTransaction::PushCatalogEntry(CatalogEntry &entry, data_ptr_t extra_data, idx_t extra_data_size) {
-	idx_t alloc_size = sizeof(CatalogEntry *);
+void DuckTransaction::PushCatalogEntry(CatalogEntry &entry, idx_t change, data_ptr_t extra_data,
+                                       idx_t extra_data_size) {
+	idx_t alloc_size = CATALOG_UNDO_HEADER;
 	if (extra_data_size > 0) {
 		alloc_size += extra_data_size + sizeof(idx_t);
 	}
@@ -91,9 +92,10 @@ void DuckTransaction::PushCatalogEntry(CatalogEntry &entry, data_ptr_t extra_dat
 	auto ptr = undo_entry.GetDataMutable();
 	// store the pointer to the catalog entry
 	Store<CatalogEntry *>(&entry, ptr);
+	Store<idx_t>(change, ptr + sizeof(CatalogEntry *));
 	if (extra_data_size > 0) {
 		// copy the extra data behind the catalog entry pointer (if any)
-		ptr += sizeof(CatalogEntry *);
+		ptr += CATALOG_UNDO_HEADER;
 		// first store the extra data size
 		Store<idx_t>(extra_data_size, ptr);
 		ptr += sizeof(idx_t);
