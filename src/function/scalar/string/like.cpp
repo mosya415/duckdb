@@ -1,5 +1,7 @@
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/likely.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/swar.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/function/scalar/string_common.hpp"
 #include "duckdb/function/scalar/string_functions.hpp"
@@ -176,7 +178,7 @@ struct StandardCharacterReader {
 
 struct ASCIILCaseReader {
 	static void NextCharacter(const char *sdata, idx_t slen, idx_t &sidx) {
-		sidx++;
+		StandardCharacterReader::NextCharacter(sdata, slen, sidx);
 	}
 
 	static char Operation(const char *data, idx_t pos) {
@@ -557,6 +559,25 @@ struct ILikeBuffer {
 	idx_t capacity = 0;
 };
 
+bool HasNonAsciiLoweringToAscii(const char *data, idx_t size) {
+	idx_t i = 0;
+	for (; i + SwarWord::SIZE <= size; i += SwarWord::SIZE) {
+		auto word = Load<uint64_t>(const_data_ptr_cast(data + i));
+		if (SwarWord::ZeroBytes(word ^ SwarWord::Repeat(0xC4)) | SwarWord::ZeroBytes(word ^ SwarWord::Repeat(0xE2))) {
+			break;
+		}
+	}
+	for (; i + 1 < size; i++) {
+		auto byte = static_cast<uint8_t>(data[i]);
+		auto next = static_cast<uint8_t>(data[i + 1]);
+		if ((byte == 0xC4 && next == 0xB0) ||
+		    (byte == 0xE2 && next == 0x84 && i + 2 < size && static_cast<uint8_t>(data[i + 2]) == 0xAA)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 struct ILikePattern {
 	template <class READER = StandardCharacterReader>
 	bool Match(string_t &str) {
@@ -571,6 +592,7 @@ struct ILikePattern {
 	string_t pattern;
 	bool has_escape;
 	char escape;
+	bool ascii;
 };
 
 struct ILikeMatcher {
@@ -587,11 +609,25 @@ struct ILikeMatcher {
 
 	template <bool KNOWN_ASCII>
 	bool Match(string_t &str, ILikeBuffer &lowered_str) {
-		if (KNOWN_ASCII || FirstNonAscii(str.GetData(), str.GetSize()) == str.GetSize()) {
-			if (matcher) {
-				return matcher->Match<true>(str);
+		if (!KNOWN_ASCII) {
+			auto ascii_end = FirstNonAscii(str.GetData(), str.GetSize());
+			if (ascii_end != str.GetSize()) {
+				return MatchNonAscii(str, ascii_end, lowered_str);
 			}
-			return lowered.Match<ASCIILCaseReader>(str);
+		}
+		return MatchUnlowered(str);
+	}
+
+	bool MatchUnlowered(string_t &str) {
+		if (matcher) {
+			return matcher->Match<true>(str);
+		}
+		return lowered.Match<ASCIILCaseReader>(str);
+	}
+
+	DUCKDB_NOINLINE bool MatchNonAscii(string_t &str, idx_t ascii_end, ILikeBuffer &lowered_str) {
+		if (lowered.ascii && !HasNonAsciiLoweringToAscii(str.GetData() + ascii_end, str.GetSize() - ascii_end)) {
+			return MatchUnlowered(str);
 		}
 		auto str_lcase = lowered_str.Lower(str);
 		if (matcher) {
@@ -616,7 +652,9 @@ struct ILikeLocalState : public FunctionLocalState {
 			input = string_t(result, UnsafeNumericCast<uint32_t>(size));
 			escape_char = '\\';
 		}
-		return {pattern.Lower(input), has_escape, escape_char};
+		auto lowered = pattern.Lower(input);
+		auto ascii = FirstNonAscii(lowered.GetData(), lowered.GetSize()) == lowered.GetSize();
+		return {lowered, has_escape, escape_char, ascii};
 	}
 
 	ILikeBuffer str;
@@ -635,11 +673,16 @@ unique_ptr<FunctionLocalState> ILikeInitLocalState(ExpressionState &state, const
 template <bool KNOWN_ASCII>
 bool ILikeOperatorFunction(ILikeLocalState &lstate, string_t str, string_t pattern, string_t escape) {
 	auto pat_lcase = lstate.LowerPattern(pattern, escape);
-	if (KNOWN_ASCII || FirstNonAscii(str.GetData(), str.GetSize()) == str.GetSize()) {
-		return pat_lcase.Match<ASCIILCaseReader>(str);
+	if (!KNOWN_ASCII) {
+		auto data = str.GetData();
+		auto size = str.GetSize();
+		auto ascii_end = FirstNonAscii(data, size);
+		if (ascii_end != size && (!pat_lcase.ascii || HasNonAsciiLoweringToAscii(data + ascii_end, size - ascii_end))) {
+			auto str_lcase = lstate.str.Lower(str);
+			return pat_lcase.Match(str_lcase);
+		}
 	}
-	auto str_lcase = lstate.str.Lower(str);
-	return pat_lcase.Match(str_lcase);
+	return pat_lcase.Match<ASCIILCaseReader>(str);
 }
 
 struct GlobOperator {
