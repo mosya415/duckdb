@@ -1,5 +1,6 @@
 #pragma once
 
+#include "duckdb/common/swar.hpp"
 #include "duckdb/common/typedefs.hpp"
 #include "duckdb/function/scalar_function.hpp"
 #include "re2/literal_finder.h"
@@ -8,8 +9,34 @@
 namespace duckdb {
 
 bool IsAscii(const char *input, idx_t n);
+
 //! Returns the index of the first byte with the high bit set, or n if all bytes are ASCII
-idx_t FirstNonAscii(const char *input, idx_t n);
+inline idx_t FirstNonAscii(const char *input, idx_t n) {
+	// Check 8 bytes at a time
+	idx_t i = 0;
+	for (; i + SwarWord::SIZE <= n; i += SwarWord::SIZE) {
+		auto high = Load<uint64_t>(const_data_ptr_cast(input + i)) & SwarWord::MSB;
+		if (high) {
+			// non-ascii character in the next 8 bytes
+			return i + SwarWord::FirstFlagged(high);
+		}
+	}
+	if (i == n) {
+		return n;
+	}
+	if (n >= SwarWord::SIZE) {
+		auto high = Load<uint64_t>(const_data_ptr_cast(input + n - SwarWord::SIZE)) & SwarWord::MSB;
+		return high ? n - SwarWord::SIZE + SwarWord::FirstFlagged(high) : n;
+	}
+	// Less than 8 bytes remain
+	for (; i < n; i++) {
+		if (input[i] & 0x80) {
+			return i;
+		}
+	}
+	return n;
+}
+
 //! Decodes one codepoint and returns its length - throws an InternalException on invalid UTF-8
 idx_t DecodeCodepoint(const char *input, idx_t size, int32_t &codepoint);
 void FillRepeated(ExpressionState &state, char *data, idx_t unit_size, idx_t size);
