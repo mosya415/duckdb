@@ -6,8 +6,10 @@
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/column_binding.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/execution/index/bound_index.hpp"
 #include "duckdb/execution/index/unbound_index.hpp"
+#include "duckdb/function/lambda_functions.hpp"
 #include "duckdb/main/config.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
@@ -80,6 +82,47 @@ void IndexBinder::InitCreateIndexInfo(LogicalGet &get, CreateIndexInfo &info) {
 	get.AddColumnId(COLUMN_IDENTIFIER_ROW_ID);
 }
 
+static const Expression &InconsistentPart(const Expression &expr) {
+	optional_ptr<const Expression> part;
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+		if (!part && !child.IsConsistent()) {
+			part = &InconsistentPart(child);
+		}
+	});
+	if (part) {
+		return *part;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		auto &function = expr.Cast<BoundFunctionExpression>();
+		if (function.Function().HasBindLambdaCallback()) {
+			auto lambda = function.BindInfo()->Cast<LambdaFunctionData>().GetLambdaExpression();
+			if (lambda && !lambda->IsConsistent()) {
+				return InconsistentPart(*lambda);
+			}
+		}
+	}
+	return expr;
+}
+
+unique_ptr<Expression> IndexBinder::BindKey(unique_ptr<ParsedExpression> &key) {
+	// The expressions are bound again when the index is loaded, so they cannot depend on the session or the query
+	// they are bound in (e.g. now(), getvariable()) - such functions are folded to constants while binding.
+	auto &properties = binder.GetStatementProperties();
+	const auto statement_requires_rebind = properties.always_require_rebind;
+	properties.always_require_rebind = false;
+	auto result = Bind(key);
+	const auto key_requires_rebind = properties.always_require_rebind;
+	properties.always_require_rebind = statement_requires_rebind;
+	if (!result->IsConsistent()) {
+		throw BinderException("Index keys cannot contain expressions with side effects. Function %s is not immutable.",
+		                      InconsistentPart(*result).Cast<BoundFunctionExpression>().Function().GetName());
+	}
+	if (key_requires_rebind) {
+		throw BinderException("Index keys cannot contain expressions with side effects.");
+	}
+	return result;
+}
+
 unique_ptr<LogicalOperator> IndexBinder::BindCreateIndex(ClientContext &context,
                                                          unique_ptr<CreateIndexInfo> create_index_info,
                                                          TableCatalogEntry &table_entry,
@@ -97,20 +140,10 @@ unique_ptr<LogicalOperator> IndexBinder::BindCreateIndex(ClientContext &context,
 	};
 	SetCatalogLookupCallback(lookup_callback);
 
-	// Bind the index expressions.
-	// The expressions are bound again when the index is loaded, so they cannot depend on the session or the query
-	// they are bound in (e.g. now(), getvariable()) - such functions are folded to constants while binding.
-	auto &properties = binder.GetStatementProperties();
-	const auto statement_requires_rebind = properties.always_require_rebind;
 	vector<unique_ptr<Expression>> expressions;
 	for (auto &expr : create_index_info->expressions) {
-		properties.always_require_rebind = false;
-		expressions.push_back(Bind(expr));
-		if (properties.always_require_rebind) {
-			throw BinderException("Index keys cannot contain expressions with side effects.");
-		}
+		expressions.push_back(BindKey(expr));
 	}
-	properties.always_require_rebind = statement_requires_rebind;
 
 	unique_ptr<Expression> bound_where;
 	if (create_index_info->where_clause) {
