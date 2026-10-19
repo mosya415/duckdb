@@ -41,7 +41,7 @@ inline idx_t FirstNonAscii(const char *input, idx_t n) {
 idx_t DecodeCodepoint(const char *input, idx_t size, int32_t &codepoint);
 void FillRepeated(ExpressionState &state, char *data, idx_t unit_size, idx_t size);
 idx_t LowerLength(const char *input_data, idx_t input_length);
-idx_t LowerCase(const char *input_data, idx_t input_length, char *result_data);
+idx_t LowerCase(const char *input_data, idx_t input_length, char *result_data, idx_t result_capacity);
 idx_t FindStrInStr(const string_t &haystack_s, const string_t &needle_s);
 idx_t FindStrInStr(const unsigned char *haystack, idx_t haystack_size, const unsigned char *needle, idx_t needle_size);
 idx_t FindStrInStr(const unsigned char *haystack, idx_t haystack_size, const unsigned char *needle, idx_t needle_size,

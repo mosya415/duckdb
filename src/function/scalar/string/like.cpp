@@ -591,8 +591,9 @@ struct ILikeBuffer {
 	}
 
 	string_t Lower(string_t input) {
-		auto result = Reserve(2 * input.GetSize());
-		auto lower_size = LowerCase(input.GetData(), input.GetSize(), result);
+		auto capacity = 2 * input.GetSize();
+		auto result = Reserve(capacity);
+		auto lower_size = LowerCase(input.GetData(), input.GetSize(), result, capacity);
 		return string_t(result, UnsafeNumericCast<uint32_t>(lower_size));
 	}
 
@@ -670,6 +671,10 @@ struct ILikeMatcher {
 		if (lowered.ascii && !HasNonAsciiLoweringToAscii(str.GetData() + ascii_end, str.GetSize() - ascii_end)) {
 			return MatchUnlowered(str);
 		}
+		return MatchLowered(str, lowered_str);
+	}
+
+	DUCKDB_NOINLINE bool MatchLowered(string_t &str, ILikeBuffer &lowered_str) {
 		auto str_lcase = lowered_str.Lower(str);
 		if (matcher) {
 			return matcher->Match(str_lcase);
