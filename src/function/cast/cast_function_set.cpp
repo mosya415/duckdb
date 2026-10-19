@@ -185,6 +185,22 @@ public:
 		return &target_type_entry->second;
 	}
 
+	bool HasExactEntry(const LogicalType &source, const LogicalType &target) const {
+		auto source_type_id_entry = casts.find(source.id());
+		if (source_type_id_entry == casts.end()) {
+			return false;
+		}
+		auto source_type_entry = source_type_id_entry->second.find(source);
+		if (source_type_entry == source_type_id_entry->second.end()) {
+			return false;
+		}
+		auto target_type_id_entry = source_type_entry->second.find(target.id());
+		if (target_type_id_entry == source_type_entry->second.end()) {
+			return false;
+		}
+		return target_type_id_entry->second.find(target) != target_type_id_entry->second.end();
+	}
+
 	void AddEntry(const LogicalType &source, const LogicalType &target, MapCastNode node) {
 		casts[source.id()][source][target.id()].insert(make_pair(target, std::move(node)));
 	}
@@ -195,6 +211,10 @@ private:
 
 bool CastFunctionSet::HasRegisteredCast(const LogicalType &source, const LogicalType &target) const {
 	return map_info && map_info->GetEntry(source, target);
+}
+
+bool CastFunctionSet::HasExactRegisteredCast(const LogicalType &source, const LogicalType &target) const {
+	return map_info && map_info->HasExactEntry(source, target);
 }
 
 bool CastFunctionSet::CanOverrideDefaultCast(const LogicalType &source, const LogicalType &target) const {
