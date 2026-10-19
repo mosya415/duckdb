@@ -115,6 +115,7 @@ private:
 	void DrainRekeys() DUCKDB_REQUIRES(lock);
 	void List(shared_ptr<SchedulerAccount> account) DUCKDB_REQUIRES(lock);
 	void Rekey(SchedulerAccount &account);
+	void MarkArriving(SchedulerAccount &account);
 	void Serve(SchedulerAccount &account);
 	void PublishTop() DUCKDB_REQUIRES(lock);
 

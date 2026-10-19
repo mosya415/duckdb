@@ -218,15 +218,21 @@ void TaskSchedulerQueue::List(shared_ptr<SchedulerAccount> account) {
 }
 
 void TaskSchedulerQueue::Publish(SchedulerAccount &account) {
-	if (account.bound.load(std::memory_order_relaxed) == 0 && !account.arriving.load(std::memory_order_relaxed) &&
-	    !account.arriving.exchange(true, std::memory_order_seq_cst)) {
-		arrivals.fetch_add(1, std::memory_order_seq_cst);
+	if (account.bound.load(std::memory_order_relaxed) == 0) {
+		MarkArriving(account);
 	}
 	account.inbox_self = account.shared_from_this();
 	auto head = inbox.load(std::memory_order_relaxed);
 	do {
 		account.inbox_next = head;
 	} while (!inbox.compare_exchange_weak(head, &account, std::memory_order_seq_cst, std::memory_order_relaxed));
+}
+
+void TaskSchedulerQueue::MarkArriving(SchedulerAccount &account) {
+	if (!account.arriving.load(std::memory_order_relaxed) &&
+	    !account.arriving.exchange(true, std::memory_order_seq_cst)) {
+		arrivals.fetch_add(1, std::memory_order_seq_cst);
+	}
 }
 
 void TaskSchedulerQueue::Serve(SchedulerAccount &account) {
@@ -359,7 +365,13 @@ bool TaskSchedulerQueue::Enqueue(ProducerToken &token, shared_ptr<Task> *tasks, 
 	if (!keep_claim) {
 		Unclaim(account);
 	}
-	return !account.listed.exchange(true, std::memory_order_seq_cst);
+	if (!account.listed.exchange(true, std::memory_order_seq_cst)) {
+		return true;
+	}
+	if (account.bound.load(std::memory_order_relaxed) == 0 && !account.claimed.load(std::memory_order_seq_cst)) {
+		MarkArriving(account);
+	}
+	return false;
 }
 
 bool TaskSchedulerQueue::Dequeue(SchedulerAccount &account, shared_ptr<Task> &task) {
@@ -411,6 +423,7 @@ shared_ptr<SchedulerAccount> TaskSchedulerQueue::Select() {
 		const auto queued_tasks = account.queued_tasks.load(std::memory_order_seq_cst);
 		if (queued_tasks <= 0) {
 			Remove(account);
+			Serve(account);
 			auto self = std::move(account.inbox_self);
 			if (Unlist(account)) {
 				List(std::move(self));
@@ -429,6 +442,7 @@ shared_ptr<SchedulerAccount> TaskSchedulerQueue::Select() {
 		}
 		Remove(account);
 		account.bound.fetch_add(1, std::memory_order_relaxed);
+		Serve(account);
 		if (queued_tasks == 1) {
 			selected = std::move(account.inbox_self);
 			account.claimed.store(true, std::memory_order_seq_cst);
@@ -455,6 +469,7 @@ idx_t TaskSchedulerQueue::GetTaskCountForProducer(ProducerToken &token) const {
 }
 
 void TaskSchedulerQueue::Forget(SchedulerAccount &account) {
+	Serve(account);
 	const auto remaining = account.queued_tasks.load(std::memory_order_relaxed);
 	if (remaining > 0) {
 		queued.fetch_sub(remaining, std::memory_order_relaxed);
