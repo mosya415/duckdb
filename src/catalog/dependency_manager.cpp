@@ -1405,6 +1405,10 @@ void DependencyManager::AlterObject(CatalogTransaction transaction, CatalogEntry
 
 		auto dep_info = DependencyInfo::FromSubject(dep);
 		dep_info.dependent.entry = new_info;
+		if (has_new_dependencies) {
+			dep_info.dependent.flags = DependencyDependentFlags().SetOwnedBy();
+			dep_info.dependent.subdependencies.clear();
+		}
 		dependencies.emplace_back(dep_info);
 	});
 
