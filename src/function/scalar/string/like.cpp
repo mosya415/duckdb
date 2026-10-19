@@ -8,7 +8,7 @@
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 
 #include "duckdb/execution/expression_executor.hpp"
-#include "re2/literal_finder.h"
+#include "re2/segment_plan.h"
 
 #include <absl/strings/ascii.h>
 
@@ -270,10 +270,18 @@ struct LikeSegment {
 
 struct LikeMatcher : public FunctionData {
 	LikeMatcher(string like_pattern_p, bool has_escape, char escape, vector<LikeSegment> segments,
-	            bool has_start_percentage, bool has_end_percentage)
+	            bool has_start_percentage, bool has_end_percentage, unique_ptr<duckdb_re2::SegmentPlan> plan_p)
 	    : like_pattern(std::move(like_pattern_p)), has_escape(has_escape), escape(escape),
 	      segments(std::move(segments)), has_start_percentage(has_start_percentage),
-	      has_end_percentage(has_end_percentage) {
+	      has_end_percentage(has_end_percentage), plan(std::move(plan_p)) {
+	}
+
+	bool HasPlan() const {
+		return plan != nullptr;
+	}
+
+	bool MatchPlan(string_t &str) {
+		return plan->Match(absl::string_view(str.GetData(), str.GetSize()));
 	}
 
 	template <bool IGNORE_CASE = false>
@@ -333,6 +341,28 @@ struct LikeMatcher : public FunctionData {
 	}
 
 	static unique_ptr<LikeMatcher> CreateLikeMatcher(string like_pattern, bool has_escape = true, char escape = '\\') {
+		return Create(std::move(like_pattern), has_escape, escape, true);
+	}
+
+	static unique_ptr<LikeMatcher> CreateLiteralMatcher(string like_pattern, bool has_escape, char escape) {
+		return Create(std::move(like_pattern), has_escape, escape, false);
+	}
+
+	unique_ptr<FunctionData> Copy() const override {
+		if (plan) {
+			return CreateLikeMatcher(like_pattern, has_escape, escape);
+		}
+		return make_uniq<LikeMatcher>(like_pattern, has_escape, escape, segments, has_start_percentage,
+		                              has_end_percentage, nullptr);
+	}
+
+	bool Equals(const FunctionData &other_p) const override {
+		auto &other = other_p.Cast<LikeMatcher>();
+		return like_pattern == other.like_pattern && has_escape == other.has_escape && escape == other.escape;
+	}
+
+private:
+	static unique_ptr<LikeMatcher> Create(string like_pattern, bool has_escape, char escape, bool single_characters) {
 		vector<LikeSegment> segments;
 		string literal;
 		bool has_start_percentage = false;
@@ -347,7 +377,16 @@ struct LikeMatcher : public FunctionData {
 				continue;
 			}
 			if (ch == '_') {
-				return nullptr;
+				if (!single_characters) {
+					return nullptr;
+				}
+				unique_ptr<duckdb_re2::SegmentPlan> plan(
+				    duckdb_re2::SegmentPlan::MakeLike(like_pattern, has_escape, escape, true));
+				if (!plan) {
+					return nullptr;
+				}
+				return make_uniq<LikeMatcher>(std::move(like_pattern), has_escape, escape, vector<LikeSegment>(), false,
+				                              false, std::move(plan));
 			}
 			if (ch != '%') {
 				literal += ch;
@@ -371,26 +410,16 @@ struct LikeMatcher : public FunctionData {
 			return nullptr;
 		}
 		return make_uniq<LikeMatcher>(std::move(like_pattern), has_escape, escape, std::move(segments),
-		                              has_start_percentage, has_end_percentage);
+		                              has_start_percentage, has_end_percentage, nullptr);
 	}
 
-	unique_ptr<FunctionData> Copy() const override {
-		return make_uniq<LikeMatcher>(like_pattern, has_escape, escape, segments, has_start_percentage,
-		                              has_end_percentage);
-	}
-
-	bool Equals(const FunctionData &other_p) const override {
-		auto &other = other_p.Cast<LikeMatcher>();
-		return like_pattern == other.like_pattern && has_escape == other.has_escape && escape == other.escape;
-	}
-
-private:
 	string like_pattern;
 	bool has_escape;
 	char escape;
 	vector<LikeSegment> segments;
 	bool has_start_percentage;
 	bool has_end_percentage;
+	unique_ptr<duckdb_re2::SegmentPlan> plan;
 };
 
 unique_ptr<FunctionData> LikeBindFunction(BindScalarFunctionInput &input) {
@@ -513,16 +542,28 @@ unique_ptr<FunctionLocalState> LikeInitLocalState(ExpressionState &state, const 
 }
 
 template <bool INVERT>
+void MatchAll(LikeMatcher &matcher, const Vector &strings, Vector &result) {
+	if (matcher.HasPlan()) {
+		UnaryExecutor::Execute<string_t, bool>(strings, result, [&](string_t str) {
+			bool match = matcher.MatchPlan(str);
+			return INVERT ? !match : match;
+		});
+		return;
+	}
+	UnaryExecutor::Execute<string_t, bool>(strings, result, [&](string_t str) {
+		bool match = matcher.Match(str);
+		return INVERT ? !match : match;
+	});
+}
+
+template <bool INVERT>
 void LikeMatchPatterns(LikeLocalState &lstate, const Vector &strings, const Vector &patterns, bool has_escape,
                        char escape, Vector &result) {
 	string_t pattern;
 	if (UniformPattern(patterns, pattern)) {
 		auto matcher = lstate.Matcher(pattern, has_escape, escape);
 		if (matcher) {
-			UnaryExecutor::Execute<string_t, bool>(strings, result, [&](string_t str) {
-				bool match = matcher->Match(str);
-				return INVERT ? !match : match;
-			});
+			MatchAll<INVERT>(*matcher, strings, result);
 			return;
 		}
 	}
@@ -603,8 +644,8 @@ struct ILikeMatcher {
 			memcpy(copy, lowered.pattern.GetData(), size);
 			lowered.pattern = string_t(copy, UnsafeNumericCast<uint32_t>(size));
 		}
-		matcher =
-		    LikeMatcher::CreateLikeMatcher(string(lowered.pattern.GetData(), size), lowered.has_escape, lowered.escape);
+		matcher = LikeMatcher::CreateLiteralMatcher(string(lowered.pattern.GetData(), size), lowered.has_escape,
+		                                            lowered.escape);
 	}
 
 	template <bool KNOWN_ASCII>
@@ -786,9 +827,7 @@ void RegularLikeFunction(DataChunk &input, ExpressionState &state, Vector &resul
 	if (func_expr.BindInfo()) {
 		auto &matcher = func_expr.BindInfo()->Cast<LikeMatcher>();
 		// use fast like matcher
-		UnaryExecutor::Execute<string_t, bool>(input.data[0], result, [&](string_t input) {
-			return INVERT ? !matcher.Match(input) : matcher.Match(input);
-		});
+		MatchAll<INVERT>(matcher, input.data[0], result);
 	} else {
 		auto &lstate = ExecuteFunctionState::GetFunctionState(state)->Cast<LikeLocalState>();
 		LikeMatchPatterns<INVERT>(lstate, input.data[0], input.data[1], true, '\\', result);
