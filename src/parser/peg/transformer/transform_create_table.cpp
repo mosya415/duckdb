@@ -381,7 +381,8 @@ ConstraintColumnDefinition PEGTransformerFactory::TransformColumnDefinition(
 	result.has_explicit_null = accumulated_constraints.has_explicit_null;
 	result.has_not_null = accumulated_constraints.has_not_null;
 	result.has_primary_key = accumulated_constraints.has_primary_key;
-	result.has_duplicate_default = accumulated_constraints.has_duplicate_default;
+	result.has_duplicate_default =
+	    accumulated_constraints.has_duplicate_default || (serial && result.column_definition.HasDefaultValue());
 	result.serial = serial;
 	return result;
 }

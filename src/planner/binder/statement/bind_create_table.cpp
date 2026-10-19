@@ -717,9 +717,20 @@ static void BindCreateTableConstraints(BoundCreateTableInfo &info, CatalogEntryR
 
 static Identifier FreeSequenceName(CatalogTransaction transaction, SchemaCatalogEntry &schema, const Identifier &table,
                                    const Identifier &column) {
+	auto taken = [&](const Identifier &name) {
+		for (auto type : {CatalogType::SEQUENCE_ENTRY, CatalogType::TABLE_ENTRY, CatalogType::INDEX_ENTRY}) {
+			if (schema.GetEntry(transaction, type, name)) {
+				return true;
+			}
+		}
+		return transaction.HasContext() &&
+		       Catalog::GetEntry(transaction.GetContext(),
+		                         EntryLookupInfo(CatalogType::SEQUENCE_ENTRY, QualifiedName(name)),
+		                         OnEntryNotFound::RETURN_NULL);
+	};
 	auto stem = table.GetIdentifierName() + "_" + column.GetIdentifierName() + "_seq";
 	Identifier candidate(stem);
-	for (idx_t suffix = 1; schema.GetEntry(transaction, CatalogType::SEQUENCE_ENTRY, candidate); suffix++) {
+	for (idx_t suffix = 1; taken(candidate); suffix++) {
 		candidate = Identifier(stem + to_string(suffix));
 	}
 	return candidate;
@@ -732,11 +743,17 @@ bool Binder::DefaultNamesSequence(const ColumnDefinition &column, const Qualifie
 	}
 	auto &function = column.DefaultValue().Cast<FunctionExpression>();
 	auto &arguments = function.GetArguments();
-	if (!(function.GetQualifiedName().Name() == Identifier("nextval")) || arguments.size() != 1 ||
-	    arguments[0].GetExpression().GetExpressionClass() != ExpressionClass::CONSTANT) {
+	if (!(function.GetQualifiedName().Name() == Identifier("nextval")) || arguments.size() != 1) {
 		return false;
 	}
-	auto &literal = arguments[0].GetExpression().Cast<ConstantExpression>().GetLiteral();
+	reference<const ParsedExpression> argument = arguments[0].GetExpression();
+	while (argument.get().GetExpressionClass() == ExpressionClass::CAST) {
+		argument = argument.get().Cast<CastExpression>().Child();
+	}
+	if (argument.get().GetExpressionClass() != ExpressionClass::CONSTANT) {
+		return false;
+	}
+	auto &literal = argument.get().Cast<ConstantExpression>().GetLiteral();
 	if (literal.IsNull()) {
 		return false;
 	}

@@ -297,6 +297,7 @@ static void CreateSerialSequences(CatalogTransaction transaction, DuckSchemaEntr
 	for (auto &serial : info.serial_sequences) {
 		CreateSequenceInfo sequence_info;
 		sequence_info.SetQualifiedName(schema.GetQualifiedName(serial.name));
+		sequence_info.temporary = table.temporary;
 		sequence_info.max_value =
 		    Value::MaximumValue(table.columns.GetColumn(serial.column).Type()).GetValue<int64_t>();
 		sequence_info.permissions = std::move(serial.permissions);
