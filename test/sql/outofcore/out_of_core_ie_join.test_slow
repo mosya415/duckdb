@@ -7,9 +7,6 @@ require tpch
 load {TEST_DIR}/out_of_core_ie_join.db
 
 statement ok
-SET async_threads=0
-
-statement ok
 SET profiling_renderer_settings = MAP {'operator_casing': 'upper'};
 
 statement ok

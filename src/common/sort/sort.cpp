@@ -259,6 +259,9 @@ SinkResultType Sort::Sink(ExecutionContext &context, DataChunk &chunk, OperatorS
 
 	// Try to finish this call to Sink
 	unique_lock<mutex> guard;
+	if (lstate.external) {
+		lstate.maximum_run_size = gstate.temporary_memory_state->GetReservation() / gstate.num_threads;
+	}
 	if (TryFinishSink(gstate, lstate, guard)) {
 		return SinkResultType::NEED_MORE_INPUT;
 	}
@@ -362,7 +365,8 @@ ProgressData Sort::GetSinkProgress(const ProgressData &source_progress, idx_t so
 class SortGlobalSourceState : public GlobalSourceState {
 public:
 	SortGlobalSourceState(const Sort &sort, ClientContext &context, SortGlobalSinkState &sink_p)
-	    : sink(sink_p), merger(sort, std::move(sink.sorted_runs), sink.partition_size, sink.external, false),
+	    : sink(sink_p), merger(sort, std::move(sink.sorted_runs), sink.partition_size, sink.external, false,
+	                           sink.temporary_memory_state->GetReservation()),
 	      merger_global_state(merger.total_count == 0 ? nullptr : merger.GetGlobalSourceState(context)), registered(0) {
 	}
 
