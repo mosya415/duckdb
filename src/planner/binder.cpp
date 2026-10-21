@@ -611,7 +611,8 @@ void Binder::BindDeleteIndexColumns(TableCatalogEntry &table, LogicalGet &get, v
 
 BoundStatement Binder::BindReturning(vector<unique_ptr<ParsedExpression>> returning_list, TableCatalogEntry &table,
                                      const Identifier &alias, TableIndex update_table_index,
-                                     unique_ptr<LogicalOperator> child_operator, virtual_column_map_t virtual_columns) {
+                                     unique_ptr<LogicalOperator> child_operator, virtual_column_map_t virtual_columns,
+                                     optional_ptr<vector<column_t>> bound_virtual_columns) {
 	vector<LogicalType> types;
 	vector<Identifier> names;
 
@@ -627,6 +628,7 @@ BoundStatement Binder::BindReturning(vector<unique_ptr<ParsedExpression>> return
 		}
 		column_count++;
 	}
+	const auto table_column_count = bound_columns.size();
 
 	binder->bind_context.AddBaseTable(update_table_index, alias, names, types, bound_columns, table,
 	                                  std::move(virtual_columns));
@@ -646,6 +648,11 @@ BoundStatement Binder::BindReturning(vector<unique_ptr<ParsedExpression>> return
 	}
 	if (new_returning_list.empty()) {
 		throw BinderException("RETURNING list is empty!");
+	}
+	if (bound_virtual_columns) {
+		for (idx_t i = table_column_count; i < bound_columns.size(); i++) {
+			bound_virtual_columns->push_back(bound_columns[i].GetPrimaryIndex());
+		}
 	}
 	auto projection = make_uniq<LogicalProjection>(GenerateTableIndex(), std::move(projection_expressions));
 	projection->AddChild(std::move(child_operator));

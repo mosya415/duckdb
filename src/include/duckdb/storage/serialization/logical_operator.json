@@ -820,6 +820,11 @@
         "name": "row_id_handling",
         "type": "RowIdHandling",
         "default": "RowIdHandling::ASSUME_UNIQUE"
+      },
+      {
+        "id": 16587,
+        "name": "returning_virtual_columns",
+        "type": "vector<column_t>"
       }
     ],
     "constructor": [

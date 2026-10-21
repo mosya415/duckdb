@@ -27,6 +27,7 @@ public:
 	TableIndex table_index;
 	bool return_chunk;
 	vector<idx_t> return_columns;
+	vector<column_t> returning_virtual_columns;
 	vector<unique_ptr<BoundConstraint>> bound_constraints;
 	//! True iff this LogicalDelete originated from a TRUNCATE TABLE statement.
 	//! Catalogs may dispatch to a fast-path truncate operator instead of the

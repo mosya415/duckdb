@@ -595,7 +595,8 @@ private:
 	BoundStatement BindReturning(vector<unique_ptr<ParsedExpression>> returning_list, TableCatalogEntry &table,
 	                             const Identifier &alias, TableIndex update_table_index,
 	                             unique_ptr<LogicalOperator> child_operator,
-	                             virtual_column_map_t virtual_columns = virtual_column_map_t());
+	                             virtual_column_map_t virtual_columns = virtual_column_map_t(),
+	                             optional_ptr<vector<column_t>> bound_virtual_columns = nullptr);
 
 	unique_ptr<QueryNode> BindTableMacro(FunctionExpression &function, MacroCatalogEntry &macro_func, idx_t depth);
 
