@@ -136,6 +136,7 @@ BoundStatement Binder::BindNode(DeleteQueryNode &node) {
 	// create the delete node
 	auto del = make_uniq<LogicalDelete>(table, GenerateTableIndex());
 	del->bound_constraints = BindConstraints(table);
+	del->row_id_handling = node.using_clauses.empty() ? RowIdHandling::ASSUME_UNIQUE : RowIdHandling::KEEP_FIRST;
 	del->is_truncate = node.is_truncate;
 	if (node.is_truncate) {
 		del->truncate_group = BindTruncateGroup(node, table);

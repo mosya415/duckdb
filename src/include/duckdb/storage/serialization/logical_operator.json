@@ -814,6 +814,12 @@
         "id": 16585,
         "name": "truncate_group",
         "type": "vector<idx_t>"
+      },
+      {
+        "id": 16586,
+        "name": "row_id_handling",
+        "type": "RowIdHandling",
+        "default": "RowIdHandling::ASSUME_UNIQUE"
       }
     ],
     "constructor": [
