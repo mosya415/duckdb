@@ -101,10 +101,17 @@ struct Cast {
 };
 
 struct HandleCastError {
-	static void AssignError(const string &error_message, CastParameters &parameters);
+	static constexpr std::string_view NUMERIC_VALUE_OUT_OF_RANGE = "NUMERIC_VALUE_OUT_OF_RANGE";
+	static constexpr std::string_view FEATURE_NOT_SUPPORTED = "FEATURE_NOT_SUPPORTED";
+
+	static void AssignError(const string &error_message, CastParameters &parameters,
+	                        std::string_view error_subtype = std::string_view());
 	static void AssignError(const string &error_message, string *error_message_ptr,
 	                        optional_ptr<const Expression> cast_source = nullptr,
-	                        QueryLocation error_location = QueryLocation());
+	                        QueryLocation error_location = QueryLocation(),
+	                        std::string_view error_subtype = std::string_view());
+	static void AssignStringToDecimalError(string_t input, uint8_t width, uint8_t scale, char decimal_separator,
+	                                       CastParameters &parameters);
 };
 
 //===--------------------------------------------------------------------===//

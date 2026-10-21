@@ -68,7 +68,8 @@ struct DecimalScaleUpCheckOperator {
 			                                      Decimal::ToString(input, data.source_width, data.source_scale),
 			                                      data.result.GetType().ToString())
 			                 : string();
-			return HandleVectorCastError::Operation<RESULT_TYPE>(std::move(error), mask, idx, data.vector_cast_data);
+			return HandleVectorCastError::Operation<RESULT_TYPE>(std::move(error), mask, idx, data.vector_cast_data,
+			                                                     HandleCastError::NUMERIC_VALUE_OUT_OF_RANGE);
 		}
 		return Cast::Operation<INPUT_TYPE, RESULT_TYPE>(input) * data.factor;
 	}
@@ -155,7 +156,8 @@ struct DecimalScaleDownCheckOperator {
 			                                      Decimal::ToString(input, data.source_width, data.source_scale),
 			                                      data.result.GetType().ToString())
 			                 : string();
-			return HandleVectorCastError::Operation<RESULT_TYPE>(std::move(error), mask, idx, data.vector_cast_data);
+			return HandleVectorCastError::Operation<RESULT_TYPE>(std::move(error), mask, idx, data.vector_cast_data,
+			                                                     HandleCastError::NUMERIC_VALUE_OUT_OF_RANGE);
 		}
 		return DecimalScaleDownOperator::Operation<INPUT_TYPE, RESULT_TYPE>(input, mask, idx, data);
 	}

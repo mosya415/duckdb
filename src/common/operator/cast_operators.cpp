@@ -2574,7 +2574,7 @@ bool StandardNumericToDecimalCast(SRC input, DST &result, CastParameters &parame
 	DST max_width = UnsafeNumericCast<DST>(NumericHelper::POWERS_OF_TEN[width - scale]);
 	if (OP::template Operation<SRC, DST>(input, max_width)) {
 		string error = StringUtil::Format("Could not cast value %d to DECIMAL(%d,%d)", input, width, scale);
-		HandleCastError::AssignError(error, parameters);
+		HandleCastError::AssignError(error, parameters, HandleCastError::NUMERIC_VALUE_OUT_OF_RANGE);
 		return false;
 	}
 	result = UnsafeNumericCast<DST>(DST(input) * NumericHelper::POWERS_OF_TEN[scale]);
@@ -2588,7 +2588,7 @@ bool NumericToHugeDecimalCast(SRC input, hugeint_t &result, CastParameters &para
 	hugeint_t hinput = Hugeint::Convert(input);
 	if (hinput >= max_width || hinput <= -max_width) {
 		string error = StringUtil::Format("Could not cast value %s to DECIMAL(%d,%d)", hinput.ToString(), width, scale);
-		HandleCastError::AssignError(error, parameters);
+		HandleCastError::AssignError(error, parameters, HandleCastError::NUMERIC_VALUE_OUT_OF_RANGE);
 		return false;
 	}
 	result = hinput * Hugeint::POWERS_OF_TEN[scale];
@@ -2808,7 +2808,7 @@ bool HugeintToDecimalCast(hugeint_t input, DST &result, CastParameters &paramete
 	hugeint_t max_width = Hugeint::POWERS_OF_TEN[width - scale];
 	if (input >= max_width || input <= -max_width) {
 		string error = StringUtil::Format("Could not cast value %s to DECIMAL(%d,%d)", input.ToString(), width, scale);
-		HandleCastError::AssignError(error, parameters);
+		HandleCastError::AssignError(error, parameters, HandleCastError::NUMERIC_VALUE_OUT_OF_RANGE);
 		return false;
 	}
 	result = Hugeint::Cast<DST>(input * Hugeint::POWERS_OF_TEN[scale]);
@@ -2848,7 +2848,7 @@ bool UhugeintToDecimalCast(uhugeint_t input, DST &result, CastParameters &parame
 	uhugeint_t max_width = Uhugeint::POWERS_OF_TEN[width - scale];
 	if (input >= max_width) {
 		string error = StringUtil::Format("Could not cast value %s to DECIMAL(%d,%d)", input.ToString(), width, scale);
-		HandleCastError::AssignError(error, parameters);
+		HandleCastError::AssignError(error, parameters, HandleCastError::NUMERIC_VALUE_OUT_OF_RANGE);
 		return false;
 	}
 	result = Uhugeint::Cast<DST>(input * Uhugeint::POWERS_OF_TEN[scale]);
@@ -2889,7 +2889,9 @@ bool DoubleToDecimalCast(SRC input, DST &result, CastParameters &parameters, uin
 	if (roundedValue <= -NumericHelper::DOUBLE_POWERS_OF_TEN[width] ||
 	    roundedValue >= NumericHelper::DOUBLE_POWERS_OF_TEN[width] || !Value::IsFinite(roundedValue)) {
 		string error = StringUtil::Format("Could not cast value %f to DECIMAL(%d,%d)", input, width, scale);
-		HandleCastError::AssignError(error, parameters);
+		HandleCastError::AssignError(error, parameters,
+		                             Value::IsNan(input) ? HandleCastError::FEATURE_NOT_SUPPORTED
+		                                                 : HandleCastError::NUMERIC_VALUE_OUT_OF_RANGE);
 		return false;
 	}
 	// For some reason PG does not use statistical rounding here (even though it _does_ for integers...)
