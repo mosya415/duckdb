@@ -10,7 +10,6 @@
 
 #include "duckdb/common/array.hpp"
 #include "duckdb/common/atomic.hpp"
-#include "duckdb/common/error_data.hpp"
 #include "duckdb/common/helper.hpp"
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/common/pair.hpp"
@@ -18,6 +17,7 @@
 #include "duckdb/common/typedefs.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/vector_operations/aggregate_executor.hpp"
+#include "duckdb/main/client_context.hpp"
 #include <iomanip>
 #include <thread>
 
@@ -106,7 +106,7 @@ struct MergeSortTree {
 		CMP cmp;
 	};
 
-	explicit MergeSortTree(const CMP &cmp = CMP()) : cmp(cmp), build_failed(false) {
+	explicit MergeSortTree(const CMP &cmp = CMP()) : cmp(cmp) {
 	}
 
 	inline Elements &LowestLevel() {
@@ -119,7 +119,9 @@ struct MergeSortTree {
 
 	Elements &Allocate(idx_t count);
 
-	void Build();
+	//! Build the tree in parallel: every thread calls this and waits for the others at each level.
+	//! The wait is interruptible so that a failed run releases the waiting threads through the executor.
+	void Build(ClientContext &context);
 
 	//	{nth index, remainder}
 	pair<idx_t, idx_t> SelectNth(const SubFrames &frames, idx_t n) const;
@@ -148,23 +150,6 @@ protected:
 	idx_t build_run;
 	idx_t build_run_length;
 	idx_t build_num_runs;
-	//! Whether building a run failed - the level being built will then never be completed
-	atomic<bool> build_failed;
-	//! The error that made building a run fail (guarded by build_lock)
-	ErrorData build_error;
-
-	//! Record a build failure so that the threads waiting for the current level can rethrow it
-	void SetBuildError(const std::exception &ex) {
-		lock_guard<mutex> guard(build_lock);
-		build_error = ErrorData(ex);
-		build_failed = true;
-	}
-
-	//! Rethrow the error recorded by SetBuildError
-	[[noreturn]] void ThrowBuildError() {
-		lock_guard<mutex> guard(build_lock);
-		build_error.Throw();
-	}
 
 	bool TryNextRun(idx_t &level_idx, idx_t &run_idx) {
 		const auto fanout = F;
@@ -361,30 +346,22 @@ vector<E> &MergeSortTree<E, O, CMP, F, C>::Allocate(idx_t count) {
 	build_run = 0;
 	build_run_length = fanout;
 	build_num_runs = (count + build_run_length - 1) / build_run_length;
-	build_failed = false;
 
 	return LowestLevel();
 }
 
 template <typename E, typename O, typename CMP, uint64_t F, uint64_t C>
-void MergeSortTree<E, O, CMP, F, C>::Build() {
+void MergeSortTree<E, O, CMP, F, C>::Build(ClientContext &context) {
 	//	Fan in parent levels until we are at the top
 	//	Note that we don't build the top layer as that would just be all the data.
 	while (build_level.load() < tree.size()) {
-		if (build_failed) {
-			//	Another thread failed to build its run, so the current level will never be completed
-			ThrowBuildError();
-		}
+		//	A failed run never completes its level, so the waiting threads
+		//	leave through the interrupt that the executor raises for the failure
+		context.InterruptCheck();
 		idx_t level_idx;
 		idx_t run_idx;
 		if (TryNextRun(level_idx, run_idx)) {
-			try {
-				BuildRun(level_idx, run_idx);
-			} catch (std::exception &ex) {
-				//	Wake up the threads waiting for this level
-				SetBuildError(ex);
-				throw;
-			}
+			BuildRun(level_idx, run_idx);
 		} else {
 			std::this_thread::yield();
 		}
