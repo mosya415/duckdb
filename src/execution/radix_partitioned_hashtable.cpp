@@ -781,13 +781,22 @@ bool ShouldExportStates(RadixHTGlobalSinkState &gstate, RadixHTLocalSinkState &l
 	return arena_size >= gstate.GetThreadLimit() / RadixHTConfig::AGGREGATE_STATE_SPILL_DIVISOR;
 }
 
+void GrowReservation(ClientContext &context, RadixHTGlobalSinkState &gstate, const idx_t aggregate_allocator_size,
+                     const idx_t thread_size) DUCKDB_REQUIRES(gstate.lock) {
+	auto &temporary_memory_state = *gstate.temporary_memory_state;
+	temporary_memory_state.SetMinimumReservation(aggregate_allocator_size * gstate.number_of_threads +
+	                                             gstate.minimum_reservation);
+	auto remaining_size =
+	    MaxValue<idx_t>(gstate.number_of_threads * thread_size, temporary_memory_state.GetRemainingSize());
+	temporary_memory_state.SetRemainingSizeAndUpdateReservation(context, 2 * remaining_size);
+}
+
 void MaybeRepartition(ClientContext &context, RadixHTGlobalSinkState &gstate, RadixHTLocalSinkState &lstate,
                       const bool combine) {
 	auto &config = gstate.config;
 	auto &ht = *lstate.ht;
 
 	// Check if we're approaching the memory limit
-	auto &temporary_memory_state = *gstate.temporary_memory_state;
 	const auto aggregate_allocator_size = ht.GetAggregateAllocator()->AllocationSize();
 	const auto total_size =
 	    aggregate_allocator_size + ht.GetPartitionedData().SizeInBytes() + ht.Capacity() * sizeof(ht_entry_t);
@@ -798,11 +807,7 @@ void MaybeRepartition(ClientContext &context, RadixHTGlobalSinkState &gstate, Ra
 			const annotated_lock_guard<annotated_mutex> guard {gstate.lock};
 			if (total_size > gstate.GetThreadLimit()) {
 				// Out-of-core would be triggered below, update minimum reservation and try to increase the reservation
-				temporary_memory_state.SetMinimumReservation(aggregate_allocator_size * gstate.number_of_threads +
-				                                             gstate.minimum_reservation);
-				auto remaining_size =
-				    MaxValue<idx_t>(gstate.number_of_threads * total_size, temporary_memory_state.GetRemainingSize());
-				temporary_memory_state.SetRemainingSizeAndUpdateReservation(context, 2 * remaining_size);
+				GrowReservation(context, gstate, aggregate_allocator_size, total_size);
 			}
 		}
 	}
@@ -881,6 +886,15 @@ void RadixPartitionedHashTable::Sink(ExecutionContext &context, DataChunk &chunk
 		DecideAdaptation(gstate, lstate);
 		ht.EnableHLL(false); // Can be disabled now (costs 5-10% performance in worst case, single column distinct)
 		lstate.adapted = true;
+	}
+
+	if (gstate.spill_plan && !gstate.external && StatePressureExceeded(gstate, ht)) {
+		const annotated_lock_guard<annotated_mutex> guard {gstate.lock};
+		if (StatePressureExceeded(gstate, ht)) {
+			const auto aggregate_allocator_size = ht.GetAggregateAllocator()->AllocationSize();
+			GrowReservation(context.client, gstate, aggregate_allocator_size,
+			                RadixHTConfig::AGGREGATE_STATE_PRESSURE_DIVISOR * aggregate_allocator_size);
+		}
 	}
 
 	if (ht.Count() + STANDARD_VECTOR_SIZE < GroupedAggregateHashTable::ResizeThreshold(lstate.local_sink_capacity) &&
