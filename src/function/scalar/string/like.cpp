@@ -202,7 +202,8 @@ bool TemplatedLikeOperator(const char *sdata, idx_t slen, const char *pdata, idx
 			char schar = READER::Operation(sdata, sidx);
 			if (HAS_ESCAPE && pchar == escape) {
 				if (pidx + 1 == plen) {
-					throw SyntaxException("Like pattern must not end with escape character!");
+					throw SyntaxException(Exception::InitializeExtraInfo("INVALID_ESCAPE_SEQUENCE", optional_idx()),
+					                      "LIKE pattern must not end with escape character");
 				}
 				if (READER::Operation(pdata, pidx + 1) == schar) {
 					pidx += 2;
@@ -457,11 +458,17 @@ bool LikeOperatorFunction(string_t &s, string_t &pat, char escape) {
 	return LikeOperatorFunction(s.GetData(), s.GetSize(), pat.GetData(), pat.GetSize(), escape);
 }
 
-char GetEscapeChar(string_t escape) {
+static void CheckEscapeString(const string_t &escape) {
 	// Only one escape character should be allowed
 	if (escape.GetSize() > 1) {
-		throw SyntaxException("Invalid escape string. Escape string must be empty or one character.");
+		auto extra_info = Exception::InitializeExtraInfo("INVALID_ESCAPE_SEQUENCE", optional_idx());
+		extra_info["hint"] = "Escape string must be empty or one character.";
+		throw SyntaxException(extra_info, "invalid escape string");
 	}
+}
+
+char GetEscapeChar(string_t escape) {
+	CheckEscapeString(escape);
 	return escape.GetSize() == 0 ? '\0' : *escape.GetData();
 }
 
@@ -1023,6 +1030,7 @@ static string SimilarToRegex(const string_t &pattern_str, std::string_view escap
 					result += "){1,1}(?:";
 				} else {
 					throw InvalidInputException(
+					    Exception::InitializeExtraInfo("INVALID_USE_OF_ESCAPE_CHARACTER", optional_idx()),
 					    "SQL regular expression may not contain more than two escape-double-quote separators");
 				}
 				nquotes++;
@@ -1081,9 +1089,7 @@ static void SimilarToEscapeFunction(DataChunk &args, ExpressionState &, Vector &
 static void SimilarToEscapeWithEscapeFunction(DataChunk &args, ExpressionState &, Vector &result) {
 	BinaryExecutor::Execute<string_t, string_t, string_t>(
 	    args.data[0], args.data[1], result, args.size(), [&](string_t pattern, string_t escape) {
-		    if (escape.GetSize() > 1) {
-			    throw InvalidInputException("invalid escape string: must be one character");
-		    }
+		    CheckEscapeString(escape);
 		    return StringVector::AddString(
 		        result, SimilarToRegex(pattern, std::string_view {escape.GetData(), escape.GetSize()}));
 	    });
@@ -1095,6 +1101,7 @@ ScalarFunctionSet SimilarToEscapeFun::GetFunctions() {
 	    ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, SimilarToEscapeFunction));
 	similar_to_escape.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, LogicalType::VARCHAR,
 	                                             SimilarToEscapeWithEscapeFunction));
+	similar_to_escape.SetFallible();
 	return similar_to_escape;
 }
 

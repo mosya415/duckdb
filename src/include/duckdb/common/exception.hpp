@@ -208,6 +208,7 @@ private:
 class SyntaxException : public Exception {
 public:
 	DUCKDB_API explicit SyntaxException(std::string_view msg);
+	DUCKDB_API explicit SyntaxException(const unordered_map<string, string> &extra_info, std::string_view msg);
 
 	template <typename... ARGS>
 	explicit SyntaxException(std::string_view msg, ARGS &&...params)

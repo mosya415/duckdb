@@ -308,6 +308,10 @@ PermissionException::PermissionException(std::string_view msg) : Exception(Excep
 SyntaxException::SyntaxException(std::string_view msg) : Exception(ExceptionType::SYNTAX, msg) {
 }
 
+SyntaxException::SyntaxException(const unordered_map<string, string> &extra_info, std::string_view msg)
+    : Exception(extra_info, ExceptionType::SYNTAX, msg) {
+}
+
 ExecutorException::ExecutorException(std::string_view msg) : Exception(ExceptionType::EXECUTOR, msg) {
 }
 

@@ -56,12 +56,12 @@ false	false
 statement error
 SELECT 'abcd' LIKE 'abc\'
 ----
-Like pattern must not end with escape character
+LIKE pattern must not end with escape character
 
 statement error
 SELECT 'abcd' LIKE 'abc#' ESCAPE '#'
 ----
-Like pattern must not end with escape character
+LIKE pattern must not end with escape character
 
 statement ok
 PREPARE like_param AS SELECT count(*) FROM strs WHERE s LIKE $1

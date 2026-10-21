@@ -147,3 +147,13 @@ query II
 SELECT 'a\b' SIMILAR TO 'a\b' ESCAPE '', 'ab' SIMILAR TO 'a\b' ESCAPE ''
 ----
 true	false
+
+statement error
+SELECT 'abc' SIMILAR TO 'abc' ESCAPE '##'
+----
+<REGEX>:.*Syntax Error: invalid escape string.*
+
+statement error
+SELECT 'abc' SIMILAR TO 'a\"b\"c\"d'
+----
+<REGEX>:.*Invalid Input Error: SQL regular expression may not contain more than two escape-double-quote separators.*

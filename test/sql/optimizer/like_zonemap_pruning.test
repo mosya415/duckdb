@@ -91,9 +91,9 @@ SELECT count(*) FILTER (WHERE id = 1), count(*) FILTER (WHERE id = 2), count(*) 
 statement error
 SELECT count(*) FROM t WHERE s LIKE 'aaa\';
 ----
-Like pattern must not end with escape character
+LIKE pattern must not end with escape character
 
 statement error
 SELECT count(*) FROM t WHERE s LIKE 'qqq' ESCAPE 'ab';
 ----
-Invalid escape string
+invalid escape string

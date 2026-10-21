@@ -128,7 +128,7 @@ false	true
 statement error
 SELECT 'abcd' LIKE 'abc#' ESCAPE '#';
 ----
-Like pattern must not end with escape character
+LIKE pattern must not end with escape character
 
 query T
 SELECT 'abc' LIKE 'abc#' ESCAPE '#';
