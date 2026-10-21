@@ -999,7 +999,7 @@ ScalarFunction LikeEscapeFun::GetFunction() {
 // `regexp_full_match(x, similar_to_escape(y))`, so this translation has to live
 // beside the parser rather than in a server-side function set -- otherwise the
 // rewrite emits a call that a plain DuckDB has no way to resolve.
-static string SimilarToRegex(const string_t &pattern_str, char escape_char) {
+static string SimilarToRegex(const string_t &pattern_str, std::string_view escape) {
 	auto pattern = pattern_str.GetData();
 	auto plen = pattern_str.GetSize();
 
@@ -1032,7 +1032,7 @@ static string SimilarToRegex(const string_t &pattern_str, char escape_char) {
 				charclass_pos = 3;
 			}
 			after_escape = false;
-		} else if (pchar == escape_char) {
+		} else if (!escape.empty() && pchar == escape.front()) {
 			after_escape = true;
 		} else if (bracket_depth > 0) {
 			// inside a bracket expression the SIMILAR TO metacharacters are literal
@@ -1074,17 +1074,18 @@ static string SimilarToRegex(const string_t &pattern_str, char escape_char) {
 
 static void SimilarToEscapeFunction(DataChunk &args, ExpressionState &, Vector &result) {
 	UnaryExecutor::Execute<string_t, string_t>(args.data[0], result, args.size(), [&](string_t pattern) {
-		return StringVector::AddString(result, SimilarToRegex(pattern, '\\'));
+		return StringVector::AddString(result, SimilarToRegex(pattern, "\\"));
 	});
 }
 
 static void SimilarToEscapeWithEscapeFunction(DataChunk &args, ExpressionState &, Vector &result) {
 	BinaryExecutor::Execute<string_t, string_t, string_t>(
 	    args.data[0], args.data[1], result, args.size(), [&](string_t pattern, string_t escape) {
-		    if (escape.GetSize() != 1) {
+		    if (escape.GetSize() > 1) {
 			    throw InvalidInputException("invalid escape string: must be one character");
 		    }
-		    return StringVector::AddString(result, SimilarToRegex(pattern, escape.GetData()[0]));
+		    return StringVector::AddString(
+		        result, SimilarToRegex(pattern, std::string_view {escape.GetData(), escape.GetSize()}));
 	    });
 }
 

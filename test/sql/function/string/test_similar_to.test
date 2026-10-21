@@ -141,3 +141,9 @@ statement error
 SELECT s FROM strings WHERE s SIMILAR TO 'ab.*%' {escape ''}
 ----
 <REGEX>:.*Parser Error: syntax error.*
+
+# an empty escape string means no escape character
+query II
+SELECT 'a\b' SIMILAR TO 'a\b' ESCAPE '', 'ab' SIMILAR TO 'a\b' ESCAPE ''
+----
+true	false
