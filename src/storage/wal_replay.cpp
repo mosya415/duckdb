@@ -297,6 +297,7 @@ protected:
 		case WALType::DELETE_TUPLE:
 		case WALType::TRUNCATE_TABLE:
 		case WALType::ADOPT_SEGMENTS:
+		case WALType::DELETE_ROW_RANGES:
 			return true;
 		default:
 			return false;
@@ -400,6 +401,7 @@ protected:
 	void ReplayUpdate();
 	void ReplayTruncateTable();
 	void ReplayAdoptSegments();
+	void ReplayDeleteRowRanges();
 	void ReplayCheckpoint();
 
 private:
@@ -1069,6 +1071,9 @@ void WriteAheadLogDeserializer::ReplayEntry(WALType entry_type) {
 		break;
 	case WALType::ADOPT_SEGMENTS:
 		ReplayAdoptSegments();
+		break;
+	case WALType::DELETE_ROW_RANGES:
+		ReplayDeleteRowRanges();
 		break;
 	default:
 		throw InternalException("Invalid WAL entry type!");
@@ -2174,6 +2179,32 @@ void WriteAheadLogDeserializer::ReplayAdoptSegments() {
 		return;
 	}
 	throw DataCorruptionException("Corrupt WAL: segments without a log table");
+}
+
+void WriteAheadLogDeserializer::ReplayDeleteRowRanges() {
+	const auto entry = WALDeleteRowRanges::Deserialize(deserializer);
+	const auto &starts = entry.starts;
+	const auto &counts = entry.counts;
+	if (starts.empty() || starts.size() != counts.size()) {
+		throw DataCorruptionException("Corrupt WAL: row ranges with mismatched starts and counts");
+	}
+	for (idx_t i = 0; i < starts.size(); i++) {
+		if (starts[i] < 0 || counts[i] == 0 ||
+		    counts[i] > static_cast<idx_t>(NumericLimits<row_t>::Maximum() - starts[i])) {
+			throw DataCorruptionException("Corrupt WAL: row range out of bounds");
+		}
+	}
+	if (DeserializeOnly()) {
+		return;
+	}
+	if (!state.current_table && state.current_log_table) {
+		state.current_log_table->ReplayDeleteRanges(context, starts, counts);
+		return;
+	}
+	if (!state.current_table && state.table_storage) {
+		return;
+	}
+	throw DataCorruptionException("Corrupt WAL: row ranges without a log table");
 }
 
 void WriteAheadLogDeserializer::ReplayCheckpoint() {
