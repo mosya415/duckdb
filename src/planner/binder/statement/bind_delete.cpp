@@ -143,7 +143,8 @@ BoundStatement Binder::BindNode(DeleteQueryNode &node) {
 	}
 
 	auto is_duck_table = table.IsDuckTable();
-	if (is_duck_table) {
+	auto columns_as_expressions = is_duck_table || table.ParentCatalog().Compatibility() == SqlCompatibility::POSTGRES;
+	if (columns_as_expressions) {
 		// Bind the row id before the table columns so it remains the first delete expression.
 		BindRowIdColumns(table, get, del->expressions);
 	}
@@ -153,7 +154,7 @@ BoundStatement Binder::BindNode(DeleteQueryNode &node) {
 	// - Else if unique or foreign key indexes exist: add only indexed columns (for delete index tracking)
 	if (!node.returning_list.empty()) {
 		// Add all physical columns for RETURNING
-		if (is_duck_table) {
+		if (columns_as_expressions) {
 			BindDeleteReturningColumns(table, get, del->return_columns, del->expressions, get);
 		} else {
 			BindDeleteReturningColumns(table, get, del->return_columns);
@@ -168,7 +169,7 @@ BoundStatement Binder::BindNode(DeleteQueryNode &node) {
 
 	del->AddChild(std::move(root));
 
-	if (!is_duck_table) {
+	if (!columns_as_expressions) {
 		// Bind external table row IDs after the returning columns to preserve their scan layout.
 		BindRowIdColumns(table, get, del->expressions);
 	}
