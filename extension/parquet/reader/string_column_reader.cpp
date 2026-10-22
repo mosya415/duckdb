@@ -127,10 +127,11 @@ void StringColumnReader::Plain(shared_ptr<ResizeableBuffer> &plain_data, uint8_t
 }
 
 void StringColumnReader::PlainSelect(shared_ptr<ResizeableBuffer> &plain_data, uint8_t *defines, idx_t num_values,
-                                     Vector &result, const SelectionVector &sel, idx_t count) {
+                                     Vector &result, const SelectionVector &sel, idx_t count, idx_t result_offset) {
 	ReferenceBlock(result, plain_data);
 	current_plain_result = &result;
-	PlainSelectTemplated<string_t, StringParquetValueConversion>(*plain_data, defines, num_values, result, sel, count);
+	PlainSelectTemplated<string_t, StringParquetValueConversion>(*plain_data, defines, num_values, result, sel, count,
+	                                                             result_offset);
 	current_plain_result = nullptr;
 }
 

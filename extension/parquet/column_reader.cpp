@@ -241,7 +241,7 @@ void ColumnReader::Plain(shared_ptr<ResizeableBuffer> &plain_data, uint8_t *defi
 }
 
 void ColumnReader::PlainSelect(shared_ptr<ResizeableBuffer> &plain_data, uint8_t *defines, idx_t num_values,
-                               Vector &result, const SelectionVector &sel, idx_t count) {
+                               Vector &result, const SelectionVector &sel, idx_t count, idx_t result_offset) {
 	throw NotImplementedException("PlainSelect not implemented");
 }
 
@@ -880,20 +880,33 @@ void ColumnReader::DirectSelect(ColumnReaderInput &input, Vector &result, const 
 
 	// prepare the first read if we haven't yet
 	BeginRead(define_out, repeat_out);
-	auto read_now = ReadPageHeaders(to_read);
-
-	// we can only push the filter into the decoder if we are reading the ENTIRE vector in one go
-	if (read_now == to_read && encoding == ColumnEncoding::PLAIN) {
-		const auto all_valid = PrepareRead(read_now, define_out, repeat_out, 0);
-		const auto define_ptr = all_valid ? nullptr : static_cast<uint8_t *>(define_out);
-		PlainSelect(block, define_ptr, read_now, result, sel, approved_tuple_count);
-
-		page_rows_available -= read_now;
-		FinishRead(to_read);
-		return;
+	SelectionVector page_sel(STANDARD_VECTOR_SIZE);
+	idx_t result_offset = 0;
+	idx_t selected = 0;
+	while (result_offset < to_read) {
+		const auto read_now = ReadPageHeaders(to_read - result_offset);
+		const auto first = selected;
+		for (; selected < approved_tuple_count && sel.get_index(selected) < result_offset + read_now; selected++) {
+			page_sel.set_index(selected - first, sel.get_index(selected) - result_offset);
+		}
+		if (encoding != ColumnEncoding::PLAIN || page_is_filtered_out || (!IsRoot() && AllValuesAreNull())) {
+			ReadData(read_now, define_out, repeat_out, result, result_offset);
+		} else {
+			if (result_offset != 0 && result.GetVectorType() != VectorType::FLAT_VECTOR) {
+				result.Flatten();
+				result.Reserve(STANDARD_VECTOR_SIZE);
+			}
+			const auto all_valid = PrepareRead(read_now, define_out, repeat_out, result_offset);
+			const auto define_ptr = all_valid ? nullptr : static_cast<uint8_t *>(define_out) + result_offset;
+			PlainSelect(block, define_ptr, read_now, result, page_sel, selected - first, result_offset);
+			page_rows_available -= read_now;
+		}
+		result_offset += read_now;
 	}
-	// fallback to regular read + filter
-	ReadInternal(input, result);
+	FinishRead(to_read);
+	if (result.GetVectorType() == VectorType::FLAT_VECTOR) {
+		FlatVector::SetSize(result, to_read);
+	}
 }
 
 void ColumnReader::Filter(ColumnReaderInput &input, Vector &result, const TableFilter &filter,
