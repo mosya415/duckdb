@@ -4,6 +4,7 @@
 #include "duckdb/execution/operator/projection/physical_tableinout_function.hpp"
 #include "duckdb/execution/operator/scan/physical_table_scan.hpp"
 #include "duckdb/execution/physical_plan_generator.hpp"
+#include "duckdb/function/scalar/lower_equality_to_ilike.hpp"
 #include "duckdb/function/table/table_scan.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
@@ -19,11 +20,15 @@ unique_ptr<TableFilterSet> MoveTableFilters(TableFilterSet &table_filters) {
 	// create the table filter map
 	auto table_filter_set = make_uniq<TableFilterSet>();
 	for (auto &entry : table_filters) {
-		table_filter_set->SetFilterByColumnIndex(entry.GetIndex(), entry.TakeFilter());
+		auto filter = entry.TakeFilter();
+		LowerEqualityToILike::Rewrite(ExpressionFilter::GetExpressionFilter(*filter, "MoveTableFilters").expr);
+		table_filter_set->SetFilterByColumnIndex(entry.GetIndex(), std::move(filter));
 	}
 	for (const auto &filter : table_filters.GetMultiColumnFilters()) {
 		const auto &expression_filter = ExpressionFilter::GetExpressionFilter(*filter, "MoveTableFilters");
-		table_filter_set->PushMultiColumnFilter(expression_filter.Copy());
+		auto copy = expression_filter.Copy();
+		LowerEqualityToILike::Rewrite(copy->expr);
+		table_filter_set->PushMultiColumnFilter(std::move(copy));
 	}
 	return table_filter_set;
 }
