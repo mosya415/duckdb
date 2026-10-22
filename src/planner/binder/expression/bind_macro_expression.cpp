@@ -843,11 +843,7 @@ void ExpressionBinder::UnfoldMacroExpression(FunctionExpression &function, Scala
 			if (prebound_argument) {
 				bound = std::move(prebound[i]);
 			} else {
-				try {
-					bound = BindChild(parsed, depth, error);
-				} catch (const ParameterNotResolvedException &) {
-					continue;
-				}
+				bound = BindChild(parsed, depth, error);
 			}
 			if (!bound || (scan.has_parameter && bound->GetReturnType().id() == LogicalTypeId::UNKNOWN)) {
 				continue;
