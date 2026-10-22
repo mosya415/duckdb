@@ -539,17 +539,6 @@ DataChunk &StringValueResult::ToChunk() {
 	return parse_chunk;
 }
 
-void StringValueResult::RebindParseChunkVectors(const vector<Vector *> &external_vectors) {
-	D_ASSERT(external_vectors.size() == parse_chunk.data.size());
-	for (idx_t c = 0; c < parse_chunk.data.size(); ++c) {
-		D_ASSERT(external_vectors[c] != nullptr);
-		D_ASSERT(external_vectors[c]->GetType().InternalType() == parse_chunk.data[c].GetType().InternalType());
-		parse_chunk.data[c].Reference(*external_vectors[c]);
-		vector_ptr[c] = FlatVector::GetDataMutable(parse_chunk.data[c]);
-		validity_mask[c] = &FlatVector::ValidityMutable(parse_chunk.data[c]);
-	}
-}
-
 void StringValueResult::Reset() {
 	if (number_of_rows == 0) {
 		return;
@@ -1201,11 +1190,11 @@ void StringValueScanner::ResumeParse() {
 	}
 }
 
-void StringValueScanner::Flush(DataChunk &insert_chunk) {
+void StringValueScanner::Flush(DataChunk &insert_chunk, bool parse) {
 	bool continue_processing;
 	do {
 		continue_processing = false;
-		auto &process_result = ParseChunk();
+		auto &process_result = parse ? ParseChunk() : result;
 		if (IsSuspended()) {
 			// Suspended on a buffer load
 			return;
@@ -1368,7 +1357,7 @@ void StringValueScanner::Flush(DataChunk &insert_chunk) {
 			if (iterator.pos.buffer_pos < to_pos) {
 				// If a chunk is complete with errors, we might get to this situation where we must proceed with the
 				// scanning
-				continue_processing = true;
+				continue_processing = parse;
 			}
 		}
 	} while (continue_processing);
@@ -1389,7 +1378,7 @@ void StringValueScanner::Initialize() {
 	result.current_line_position.end = result.current_line_position.begin;
 }
 
-void StringValueScanner::ProcessExtraRow() {
+bool StringValueScanner::ProcessExtraRow() {
 	result.NullPaddingQuotedNewlineCheck();
 	idx_t to_pos = cur_buffer_handle->actual_size;
 	while (iterator.pos.buffer_pos < to_pos) {
@@ -1398,13 +1387,13 @@ void StringValueScanner::ProcessExtraRow() {
 		case CSVState::INVALID:
 			result.InvalidState(result);
 			iterator.pos.buffer_pos++;
-			return;
+			return true;
 		case CSVState::RECORD_SEPARATOR:
 			if (states.states[0] == CSVState::RECORD_SEPARATOR) {
 				result.EmptyLine(result, iterator.pos.buffer_pos);
 				iterator.pos.buffer_pos++;
 				lines_read++;
-				return;
+				return true;
 			} else if (states.states[0] != CSVState::CARRIAGE_RETURN) {
 				if (result.IsCommentSet(result)) {
 					result.UnsetComment(result, iterator.pos.buffer_pos);
@@ -1413,7 +1402,7 @@ void StringValueScanner::ProcessExtraRow() {
 				}
 				iterator.pos.buffer_pos++;
 				lines_read++;
-				return;
+				return true;
 			}
 			lines_read++;
 			iterator.pos.buffer_pos++;
@@ -1427,12 +1416,12 @@ void StringValueScanner::ProcessExtraRow() {
 				}
 				iterator.pos.buffer_pos++;
 				lines_read++;
-				return;
+				return true;
 			} else {
 				result.EmptyLine(result, iterator.pos.buffer_pos);
 				iterator.pos.buffer_pos++;
 				lines_read++;
-				return;
+				return true;
 			}
 			break;
 		case CSVState::DELIMITER:
@@ -1489,6 +1478,7 @@ void StringValueScanner::ProcessExtraRow() {
 			break;
 		}
 	}
+	return false;
 }
 
 string_t StringValueScanner::RemoveEscape(const char *str_ptr, idx_t end, char escape, char quote, bool strict_mode,
@@ -2116,10 +2106,11 @@ void StringValueScanner::FinalizeChunkProcess() {
 
 void StringValueScanner::FinishBoundaryScan(const bool moved) {
 	if (cur_buffer_handle) {
-		if (moved && result.cur_col_id > 0) {
-			ProcessExtraRow();
-		} else if (!moved) {
-			ProcessExtraRow();
+		if (!moved || result.cur_col_id > 0) {
+			const auto rows = result.number_of_rows;
+			while (!ProcessExtraRow() && row_lookup && !cur_buffer_handle->is_last_buffer &&
+			       TryMoveToNextBuffer() == MoveBufferResult::MOVED && result.number_of_rows == rows) {
+			}
 		}
 		if (cur_buffer_handle->is_last_buffer && iterator.pos.buffer_pos >= cur_buffer_handle->actual_size) {
 			// the last buffer has no next buffer to wait for

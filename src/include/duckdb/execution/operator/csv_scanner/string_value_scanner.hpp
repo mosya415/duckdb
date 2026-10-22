@@ -191,11 +191,6 @@ public:
 	unsafe_vector<void *> vector_ptr;
 	unsafe_vector<ValidityMask *> validity_mask;
 
-	//! Repoint parse_chunk's vectors at `external_vectors` so subsequent
-	//! ParseValue writes land in their buffers. One entry per parse_chunk
-	//! column, in parse_chunk's column order.
-	void RebindParseChunkVectors(const vector<Vector *> &external_vectors);
-
 	//! Variables to iterate over the CSV buffers
 
 	const char *buffer_ptr;
@@ -339,7 +334,7 @@ public:
 	StringValueResult &ParseChunk() override;
 
 	//! Flushes the result to the insert_chunk
-	void Flush(DataChunk &insert_chunk);
+	void Flush(DataChunk &insert_chunk, bool parse = true);
 
 	//! Reposition the scanner to scan a fresh boundary. Reuses the parse_chunk and all
 	//! per-instance state allocated at construction (state machine, validity masks,
@@ -400,6 +395,7 @@ public:
 
 	//! Variable that manages buffer tracking
 	shared_ptr<CSVBufferUsage> buffer_tracker;
+	bool row_lookup = false;
 
 private:
 	//! Result of trying to move to the next buffer
@@ -419,7 +415,7 @@ private:
 	//! Function used to process values that go over the first buffer, extra allocation might be necessary
 	void ProcessOverBufferValue();
 
-	void ProcessExtraRow();
+	bool ProcessExtraRow();
 	//! Function used to move from one buffer to the other, if necessary
 	MoveBufferResult TryMoveToNextBuffer();
 	//! Move to the next buffer and processes the value straddling the buffer edge
