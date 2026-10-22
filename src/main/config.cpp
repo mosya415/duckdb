@@ -206,6 +206,7 @@ static const ConfigurationOption internal_options[] = {
     DUCKDB_SETTING(IntegerDivisionSetting),
     DUCKDB_SETTING_CALLBACK(IntegerOverflowSetting),
     DUCKDB_SETTING_CALLBACK(LambdaSyntaxSetting),
+    DUCKDB_SETTING(LateMaterializationLookupMaxRowsSetting),
     DUCKDB_SETTING(LateMaterializationMaxRowsSetting),
     DUCKDB_SETTING_CALLBACK(LegacyDisableNullTypeSetting),
     DUCKDB_SETTING_CALLBACK(LegacyMetricsFormatSetting),

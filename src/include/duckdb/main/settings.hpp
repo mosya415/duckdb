@@ -2021,6 +2021,22 @@ struct LambdaSyntaxSetting {
 	static void OnSet(SettingCallbackInfo &info, Value &input);
 };
 
+struct LateMaterializationLookupMaxRowsSetting {
+	using RETURN_TYPE = idx_t;
+	static constexpr const char *Name = "late_materialization_lookup_max_rows";
+	static constexpr const char *Description =
+	    "The maximum amount of rows in the LIMIT/TOP_N/SAMPLE operator for which a scan that can look up rows by their "
+	    "row id is late materialized through a LOOKUP_JOIN. 0 disables the LOOKUP_JOIN: late materialization then "
+	    "joins on the row ids, up to late_materialization_max_rows.";
+	static constexpr const char *InputType = "UBIGINT";
+	static constexpr bool IsDebug = false;
+	static constexpr bool IsDeprecated = false;
+	static constexpr bool NoResetAll = false;
+	static constexpr const char *DefaultValue = "2048";
+	static constexpr SettingScopeTarget Scope = SettingScopeTarget::LOCAL_DEFAULT;
+	static constexpr idx_t SettingIndex = NEXT_SETTING_INDEX();
+};
+
 struct LateMaterializationMaxRowsSetting {
 	using RETURN_TYPE = idx_t;
 	static constexpr const char *Name = "late_materialization_max_rows";
