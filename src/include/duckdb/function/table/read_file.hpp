@@ -31,11 +31,10 @@ struct ReadFileGlobalState : public GlobalTableFunctionState {
 	vector<idx_t> column_ids;
 	bool requires_file_open = false;
 	bool requires_file_metadata = false;
-
-	unique_ptr<MemoryStream> stream;
 };
 
-TableFunction MakeTextLookupTableFunction();
-TableFunction MakeBlobLookupTableFunction();
+struct ReadFileLocalState : public LocalTableFunctionState {
+	unique_ptr<MemoryStream> stream;
+};
 
 } // namespace duckdb
