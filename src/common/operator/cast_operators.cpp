@@ -13,6 +13,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/blob.hpp"
 #include "duckdb/common/types/cast_helpers.hpp"
+#include "fmt/compile.h"
 #include "duckdb/common/types/date.hpp"
 #include "duckdb/common/types/hugeint.hpp"
 #include "duckdb/common/types/uuid.hpp"
@@ -1644,8 +1645,9 @@ string_t CastFromBitToString::Operation(string_t input, StringHeap &heap) {
 //===--------------------------------------------------------------------===//
 template <>
 string_t CastFromPointer::Operation(uintptr_t input, StringHeap &heap) {
-	std::string s = duckdb_fmt::format("0x{:x}", input);
-	return heap.AddString(s);
+	char buffer[2 + 2 * sizeof(uintptr_t)];
+	const auto result = duckdb_fmt::format_to_n(buffer, sizeof(buffer), FMT_COMPILE("0x{:x}"), input);
+	return heap.AddString(buffer, result.size);
 }
 
 //===--------------------------------------------------------------------===//

@@ -10,7 +10,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/vector_operations/unary_executor.hpp"
 #include "fast_float/fast_float.h"
-#include "fmt/format.h"
+#include "fmt/compile.h"
 
 //----------------------------------------------------------------------------------------------------------------------
 // Internals
@@ -212,7 +212,9 @@ public:
 		buffer.push_back(c);
 	}
 	void Write(double value) {
-		duckdb_fmt::format_to(std::back_inserter(buffer), "{}", value);
+		char digits[32];
+		const auto result = duckdb_fmt::format_to_n(digits, sizeof(digits), FMT_COMPILE("{}"), value);
+		buffer.insert(buffer.end(), digits, digits + result.size);
 	}
 	const vector<char> &GetBuffer() const {
 		return buffer;

@@ -6,7 +6,6 @@
 #include "duckdb/execution/physical_operator.hpp"
 #include "duckdb/parallel/pipeline.hpp"
 #include "duckdb/planner/logical_operator.hpp"
-#include "fmt/printf.h"
 
 namespace duckdb {
 
@@ -85,7 +84,9 @@ static string EscapedString(const string &str) {
 			break;
 		default:
 			if ((unsigned char)ch < ' ') {
-				out += duckdb_fmt::sprintf("\\u%04x", (int)ch);
+				out += "\\u00";
+				out += "0123456789abcdef"[(unsigned char)ch >> 4];
+				out += "0123456789abcdef"[(unsigned char)ch & 0x0F];
 			} else {
 				out += ch;
 			}
