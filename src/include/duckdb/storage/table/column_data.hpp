@@ -255,6 +255,9 @@ protected:
 	                 idx_t target_scan, UpdateScanType update_type);
 	void SelectVector(ColumnScanState &state, Vector &result, idx_t target_count, const SelectionVector &sel,
 	                  idx_t sel_count);
+	//! SelectVector of a vector whose rows span several segments, fetching only the selected rows
+	void SelectVectorAcrossSegments(ColumnScanState &state, Vector &result, idx_t target_count,
+	                                const SelectionVector &sel, idx_t sel_count);
 	void FilterVector(ColumnScanState &state, Vector &result, idx_t target_count, SelectionVector &sel,
 	                  idx_t &sel_count, const TableFilter &filter, TableFilterState &filter_state);
 

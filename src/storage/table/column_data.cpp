@@ -304,7 +304,8 @@ void ColumnData::SelectVector(ColumnScanState &state, Vector &result, idx_t targ
 	BeginScanVectorInternal(state);
 	auto &current = state.current->GetNode();
 	if (state.current->GetRowStart() + current.count - state.offset_in_column < target_count) {
-		throw InternalException("ColumnData::SelectVector should be able to fetch everything from one segment");
+		SelectVectorAcrossSegments(state, result, target_count, sel, sel_count);
+		return;
 	}
 	if (state.scan_options && state.scan_options->force_fetch_row) {
 		const auto segment_offset = state.offset_in_column - state.current->GetRowStart();
@@ -319,6 +320,37 @@ void ColumnData::SelectVector(ColumnScanState &state, Vector &result, idx_t targ
 	}
 	state.offset_in_column += target_count;
 	state.internal_index = state.offset_in_column;
+}
+
+void ColumnData::SelectVectorAcrossSegments(ColumnScanState &state, Vector &result, idx_t target_count,
+                                            const SelectionVector &sel, idx_t sel_count) {
+	ColumnFetchState fetch_state;
+	idx_t rows[STANDARD_VECTOR_SIZE];
+	idx_t piece_start = 0;
+	idx_t selected = 0;
+	while (true) {
+		auto &current = state.current->GetNode();
+		const auto segment_offset = state.offset_in_column - state.current->GetRowStart();
+		const auto piece_end =
+		    piece_start + MinValue<idx_t>(target_count - piece_start, current.count - segment_offset);
+		const auto first = selected;
+		for (; selected < sel_count && sel.get_index(selected) < piece_end; selected++) {
+			rows[selected - first] = segment_offset + sel.get_index(selected) - piece_start;
+		}
+		current.FetchRows(fetch_state, rows, selected - first, result, *FlatVector::IncrementalSelectionVector(),
+		                  first);
+		state.offset_in_column += piece_end - piece_start;
+		piece_start = piece_end;
+		if (piece_start == target_count) {
+			return;
+		}
+		state.previous_states.emplace_back(std::move(state.scan_state));
+		state.current = data.GetNextSegment(*state.current);
+		D_ASSERT(state.current);
+		state.current->GetNode().InitializeScan(state);
+		state.internal_index = state.current->GetRowStart();
+		state.segment_checked = false;
+	}
 }
 
 void ColumnData::FilterVector(ColumnScanState &state, Vector &result, idx_t target_count, SelectionVector &sel,

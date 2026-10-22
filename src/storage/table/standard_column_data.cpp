@@ -123,9 +123,7 @@ void StandardColumnData::Select(TransactionData transaction, idx_t vector_index,
 	auto validity_compression = validity->GetCompressionFunction();
 	bool validity_has_select = validity_compression && validity_compression->select;
 	auto target_count = GetVectorCount(vector_index);
-	auto scan_type = GetVectorScanType(state, target_count, result);
-	bool scan_entire_vector = scan_type == ScanVectorType::SCAN_ENTIRE_VECTOR;
-	if (!has_select || !validity_has_select || !scan_entire_vector) {
+	if (!has_select || !validity_has_select || HasUpdates() || result.GetVectorType() != VectorType::FLAT_VECTOR) {
 		// we are not scanning an entire vector - this can have several causes (updates, etc)
 		ColumnData::Select(transaction, vector_index, state, result, sel, sel_count);
 		return;
