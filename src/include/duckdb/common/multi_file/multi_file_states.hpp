@@ -89,8 +89,10 @@ struct MultiFileBindData : public TableFunctionData {
 	//! Table column names - set when using COPY tbl FROM file.parquet
 	vector<string> table_columns;
 	shared_ptr<BaseFileReader> initial_reader;
+	weak_ptr<BaseFileReader> statistics_reader;
 	// The union readers are created (when the union_by_name option is on) during binding
 	vector<shared_ptr<BaseUnionData>> union_readers;
+	vector<weak_ptr<BaseUnionData>> statistics_union_readers;
 
 	void Initialize(shared_ptr<BaseFileReader> reader) {
 		initial_reader = std::move(reader);

@@ -68,6 +68,11 @@ unique_ptr<FunctionData> MultiFileBindData::Copy() const {
 	result->names = names;
 	result->virtual_columns = virtual_columns;
 	result->table_columns = table_columns;
+	result->statistics_reader = initial_reader ? weak_ptr<BaseFileReader>(initial_reader) : statistics_reader;
+	result->statistics_union_readers = statistics_union_readers;
+	if (!union_readers.empty()) {
+		result->statistics_union_readers.assign(union_readers.begin(), union_readers.end());
+	}
 	return std::move(result);
 }
 

@@ -1121,7 +1121,8 @@ public:
 		auto &bind_data = input.bind_data->Cast<MultiFileBindData>();
 		auto &column_index = input.column_index;
 
-		if (!bind_data.initial_reader) {
+		auto reader = bind_data.initial_reader ? bind_data.initial_reader : bind_data.statistics_reader.lock();
+		if (!reader) {
 			// no reader
 			return nullptr;
 		}
@@ -1138,8 +1139,7 @@ public:
 			if (bind_data.file_list->GetExpandResult() == FileExpandResult::MULTIPLE_FILES) {
 				return nullptr;
 			}
-			return bind_data.initial_reader->GetVirtualColumnStatistics(
-			    context, MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER);
+			return reader->GetVirtualColumnStatistics(context, MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER);
 		}
 
 		// a hive partitioning column overrides any file column of the same name - the statistics stored in the
@@ -1152,14 +1152,22 @@ public:
 
 		// NOTE: we do not want to parse the file metadata for the sole purpose of getting column statistics
 		const bool multiple_files = bind_data.file_list->GetExpandResult() == FileExpandResult::MULTIPLE_FILES;
-		if (multiple_files && !bind_data.file_options.union_by_name) {
+		vector<shared_ptr<BaseUnionData>> locked_union_readers;
+		for (auto &union_reader : bind_data.statistics_union_readers) {
+			locked_union_readers.push_back(union_reader.lock());
+			if (!locked_union_readers.back()) {
+				return nullptr;
+			}
+		}
+		auto &union_readers = bind_data.union_readers.empty() ? locked_union_readers : bind_data.union_readers;
+		if (multiple_files && (!bind_data.file_options.union_by_name || union_readers.empty())) {
 			// multiple files, but no union_by_name: no luck!
 			return nullptr;
 		}
-		auto result = bind_data.initial_reader->GetStatistics(context, col_name);
+		auto result = reader->GetStatistics(context, col_name);
 		if (result && multiple_files) {
-			for (idx_t i = 1; i < bind_data.union_readers.size(); i++) {
-				auto &union_reader = *bind_data.union_readers[i];
+			for (idx_t i = 1; i < union_readers.size(); i++) {
+				auto &union_reader = *union_readers[i];
 				auto stats = union_reader.GetStatistics(context, col_name);
 				if (!stats || result->GetType() != stats->GetType()) {
 					return nullptr;
