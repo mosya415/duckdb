@@ -309,6 +309,9 @@ AllocatedData JSONReader::RemoveBuffer(JSONBufferHandle &handle) {
 	return result;
 }
 
+static inline const char *NextNewline(const char *ptr, const idx_t size);
+static inline const char *NextJSON(const char *ptr, const idx_t size);
+
 bool JSONReader::FetchRow(JSONReaderScanState &scan_state, idx_t file_offset) {
 	// SCAN_ENTIRE_FILE (not SCAN_PARTIAL) is deliberate: SCAN_PARTIAL routes
 	// FinalizeBufferInternal through CopyRemainderFromPreviousBuffer which
@@ -346,11 +349,19 @@ bool JSONReader::FetchRow(JSONReaderScanState &scan_state, idx_t file_offset) {
 		const idx_t in_buffer_off = handle->buffer_start + (file_offset - handle->file_start);
 		auto *json_start = scan_state.buffer_ptr + in_buffer_off;
 		const idx_t available = scan_state.buffer_size - in_buffer_off;
-		yyjson_doc *doc = nullptr;
+		const char *json_end = nullptr;
 		if (available != 0) {
+			json_end = GetFormat() == JSONFormat::NEWLINE_DELIMITED ? NextNewline(json_start, available)
+			                                                        : NextJSON(json_start, available);
+		}
+		if (!json_end && read_at_offset) {
+			json_end = json_start + available;
+		}
+		yyjson_doc *doc = nullptr;
+		if (json_end && json_end != json_start) {
 			yyjson_read_err err;
-			doc = JSONCommon::ReadDocumentUnsafe(json_start, available, JSONCommon::READ_STOP_FLAG,
-			                                     scan_state.allocator.GetYYAlc(), &err);
+			doc = JSONCommon::ReadDocumentUnsafe(json_start, NumericCast<idx_t>(json_end - json_start),
+			                                     JSONCommon::READ_STOP_FLAG, scan_state.allocator.GetYYAlc(), &err);
 		}
 		if (doc) {
 			scan_state.units[0] = JSONString(json_start, yyjson_doc_get_read_size(doc));
