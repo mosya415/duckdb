@@ -393,12 +393,12 @@ SELECT g, finalize(kurtosis_pop(d) EXPORT_STATE) FROM dummy GROUP BY g ORDER BY 
 query T
 SELECT kurtosis(d) EXPORT_STATE FROM dummy;
 ----
-{'n': 100, 'sum': 4950, 'sum_sqr': 328350, 'sum_cub': 24502500, 'sum_four': 1950333330}
+{'n': 100, 'shift': 0, 'sum': 4950, 'sum_sqr': 328350, 'sum_cub': 24502500, 'sum_four': 1950333330}
 
 query T
 SELECT kurtosis_pop(d) EXPORT_STATE FROM dummy;
 ----
-{'n': 100, 'sum': 4950, 'sum_sqr': 328350, 'sum_cub': 24502500, 'sum_four': 1950333330}
+{'n': 100, 'shift': 0, 'sum': 4950, 'sum_sqr': 328350, 'sum_cub': 24502500, 'sum_four': 1950333330}
 
 # You're holding it wrong:
 
