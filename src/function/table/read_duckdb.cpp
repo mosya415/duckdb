@@ -39,6 +39,9 @@ struct DuckDBMultiFileInfo : MultiFileReaderInterface {
 	unique_ptr<GlobalTableFunctionState> InitializeGlobalState(ClientContext &context, MultiFileBindData &bind_data,
 	                                                           MultiFileGlobalState &global_state) override;
 	unique_ptr<LocalTableFunctionState> InitializeLocalState(ClientContext &, GlobalTableFunctionState &) override;
+	bool SupportsLookup(const MultiFileBindData &, TableFunctionLookupInfo &) const override {
+		return true;
+	}
 	shared_ptr<BaseFileReader> CreateReader(ClientContext &context, GlobalTableFunctionState &gstate,
 	                                        BaseUnionData &union_data, const MultiFileBindData &bind_data_p) override;
 	shared_ptr<BaseFileReader> CreateReader(ClientContext &context, GlobalTableFunctionState &gstate,
@@ -98,6 +101,8 @@ public:
 	                       LocalTableFunctionState &lstate) override;
 	AsyncResult Scan(ClientContext &context, GlobalTableFunctionState &global_state,
 	                 LocalTableFunctionState &local_state, DataChunk &chunk) override;
+	void Lookup(ClientContext &context, GlobalTableFunctionState &global_state, LocalTableFunctionState &local_state,
+	            std::span<const int64_t> rows, std::span<idx_t> survivors, DataChunk &chunk) override;
 	shared_ptr<BaseUnionData> GetUnionData(idx_t file_idx) override;
 	void FinishFile(ClientContext &context, GlobalTableFunctionState &gstate) override;
 	double GetProgressInFile(ClientContext &context) override;
@@ -124,9 +129,23 @@ private:
 
 struct DuckDBReadGlobalState : GlobalTableFunctionState {};
 
+struct DuckDBLookupCursor {
+	DuckDBLookupCursor(ClientContext &context, TableCatalogEntry &table_entry,
+	                   const vector<ColumnIndex> &column_indexes);
+
+	idx_t Lookup(ClientContext &context, TableCatalogEntry &table_entry, optional_ptr<TableFilterSet> filters,
+	             std::span<const int64_t> rows, std::span<idx_t> survivors, DataChunk &output);
+
+	vector<StorageIndex> fetch_columns;
+	vector<LogicalType> fetch_types;
+	vector<idx_t> output_to_fetch_col;
+	TableLookupState lookup_state;
+};
+
 struct DuckDBReadLocalState : LocalTableFunctionState {
 	unique_ptr<LocalTableFunctionState> local_state;
 	shared_ptr<AttachedDatabaseWrapper> attached_database;
+	unique_ptr<DuckDBLookupCursor> lookup;
 };
 
 string DuckDBFileReaderOptions::GetCandidates(const vector<reference<TableCatalogEntry>> &tables) const {
@@ -336,6 +355,17 @@ AsyncResult DuckDBReader::Scan(ClientContext &context, GlobalTableFunctionState 
 	}
 }
 
+void DuckDBReader::Lookup(ClientContext &context, GlobalTableFunctionState &, LocalTableFunctionState &lstate_p,
+                          std::span<const int64_t> rows, std::span<idx_t> survivors, DataChunk &chunk) {
+	auto &lstate = lstate_p.Cast<DuckDBReadLocalState>();
+	auto &table_entry = GetTableEntry();
+	if (!lstate.lookup) {
+		AssignSharedPointer(lstate.attached_database, db_wrapper);
+		lstate.lookup = make_uniq<DuckDBLookupCursor>(context, table_entry, column_indexes);
+	}
+	chunk.SetCardinality(lstate.lookup->Lookup(context, table_entry, filters.get(), rows, survivors, chunk));
+}
+
 void DuckDBReader::FinishFile(ClientContext &context, GlobalTableFunctionState &gstate) {
 	db_wrapper.reset();
 }
@@ -536,88 +566,43 @@ TableFunction ReadDuckDBTableFunction::GetFunction() {
 	return static_cast<TableFunction>(read_duckdb);
 }
 
-namespace {
-
-struct DuckDBLookupGlobalState : GlobalTableFunctionState {
-	shared_ptr<DuckDBReader> reader;
-	vector<StorageIndex> fetch_columns;
-	vector<LogicalType> fetch_types;
-	vector<idx_t> output_to_fetch_col;
-	DataChunk fetch_chunk;
-	optional_ptr<TableFilterSet> pushed_filters;
-	//! Persistent lookup cursor, reused across batches so the scan/decode state stays warm.
-	unique_ptr<TableScanState> lookup_scan_state;
-};
-
-unique_ptr<GlobalTableFunctionState> DuckDBLookupInitGlobal(ClientContext &context, TableFunctionInitInput &input) {
-	auto &bind_data = input.bind_data->CastNoConst<MultiFileBindData>();
-	auto &duck_bind = bind_data.bind_data->Cast<DuckDBReadBindData>();
-	auto state = make_uniq<DuckDBLookupGlobalState>();
-
-	const auto &file = bind_data.file_list->GetFirstFile();
-	state->reader = make_shared_ptr<DuckDBReader>(context, file, *duck_bind.options);
-
-	auto &table_entry = state->reader->GetTableEntry();
-	auto &columns = table_entry.GetColumns();
-	state->output_to_fetch_col.reserve(input.column_indexes.size());
-	for (auto &col : input.column_indexes) {
+DuckDBLookupCursor::DuckDBLookupCursor(ClientContext &context, TableCatalogEntry &table_entry,
+                                       const vector<ColumnIndex> &column_indexes) {
+	output_to_fetch_col.reserve(column_indexes.size());
+	for (auto &col : column_indexes) {
 		if (col.IsVirtualColumn()) {
-			state->output_to_fetch_col.push_back(DConstants::INVALID_INDEX);
+			output_to_fetch_col.push_back(DConstants::INVALID_INDEX);
 			continue;
 		}
-		const auto logical_col = col.GetPrimaryIndex();
-		const auto physical_col = columns.LogicalToPhysical(LogicalIndex(logical_col)).index;
+		auto storage_index = table_entry.GetStorageIndex(col);
 		idx_t fetch_idx = DConstants::INVALID_INDEX;
-		for (idx_t i = 0; i < state->fetch_columns.size(); ++i) {
-			if (state->fetch_columns[i].GetPrimaryIndex() == physical_col) {
-				fetch_idx = i;
-				break;
+		if (!col.HasChildren()) {
+			for (idx_t i = 0; i < fetch_columns.size(); ++i) {
+				if (!fetch_columns[i].HasChildren() && fetch_columns[i] == storage_index) {
+					fetch_idx = i;
+					break;
+				}
 			}
 		}
 		if (fetch_idx == DConstants::INVALID_INDEX) {
-			fetch_idx = state->fetch_columns.size();
-			state->fetch_columns.emplace_back(physical_col);
-			state->fetch_types.push_back(columns.GetColumn(LogicalIndex(logical_col)).Type());
+			fetch_idx = fetch_columns.size();
+			fetch_columns.push_back(std::move(storage_index));
+			fetch_types.push_back(col.HasType() ? col.GetScanType() : table_entry.GetColumn(col.ToLogical()).Type());
 		}
-		state->output_to_fetch_col.push_back(fetch_idx);
+		output_to_fetch_col.push_back(fetch_idx);
 	}
-	state->fetch_chunk.Initialize(context, state->fetch_types);
-	state->pushed_filters = input.filters;
-
-	return std::move(state);
+	lookup_state.scratch.Initialize(context, fetch_types);
 }
 
-void DuckDBLookupScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
-	auto &gstate = data.global_state->Cast<DuckDBLookupGlobalState>();
-	if (data.pk_lookups.empty()) {
-		return;
-	}
-	D_ASSERT(data.pk_survivors.size() == data.pk_lookups.size());
-
-	auto &table_entry = gstate.reader->GetTableEntry();
+idx_t DuckDBLookupCursor::Lookup(ClientContext &context, TableCatalogEntry &table_entry,
+                                 optional_ptr<TableFilterSet> filters, std::span<const int64_t> rows,
+                                 std::span<idx_t> survivors, DataChunk &output) {
 	auto &storage = table_entry.Cast<DuckTableEntry>().GetStorage();
 	auto &transaction = DuckTransaction::Get(context, table_entry.ParentCatalog());
-
-	const auto w =
-	    storage.LookupScan(transaction, context, gstate.fetch_columns, gstate.pushed_filters, data.pk_lookups.data(),
-	                       data.pk_lookups.data() + data.pk_lookups.size(), data.pk_survivors.data(),
-	                       gstate.output_to_fetch_col.data(), gstate.fetch_chunk, output, gstate.lookup_scan_state);
-	// LookupScan wrote each output row's requested-pk index into pk_survivors and compacted output: a
+	// LookupRows writes each output row's requested-pk index into survivors and compacts output: a
 	// requested id missing from the source or dropped by a pushed filter gets no slot.
-	output.SetCardinality(w);
-}
-
-} // namespace
-
-//! Standalone lookup TableFunction for read_duckdb: gstate opens the database
-//! once per query, pk_lookups (sorted duckdb row ids) arrive per call via
-//! TableFunctionInput, rows are read through a DataTable::Scan of the row id
-//! range with the caller's transaction.
-TableFunction MakeDuckDBLookupTableFunction() {
-	TableFunction fn;
-	fn.init_global = DuckDBLookupInitGlobal;
-	fn.function = DuckDBLookupScan;
-	return fn;
+	return storage.LookupRows(transaction, context, fetch_columns, filters, rows.data(), rows.data() + rows.size(),
+	                          survivors.data(), output_to_fetch_col.data(), output, lookup_state);
 }
 
 unique_ptr<TableRef> ReadDuckDBTableFunction::ReplacementScan(ClientContext &context, ReplacementScanInput &input,
