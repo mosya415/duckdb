@@ -6,6 +6,7 @@
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/logical_operator_visitor.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
+#include "duckdb/planner/operator/logical_lookup_join.hpp"
 #include "duckdb/planner/operator/logical_sample.hpp"
 
 namespace duckdb {
@@ -70,6 +71,8 @@ static LogicalOperatorRepeatability ClassifyOperatorType(LogicalOperator &op) {
 		}
 		return LogicalOperatorRepeatability::REPEATABLE;
 	}
+	case LogicalOperatorType::LOGICAL_LOOKUP_JOIN:
+		return ClassifyOperatorType(op.Cast<LogicalLookupJoin>().GetSource());
 	case LogicalOperatorType::LOGICAL_SAMPLE: {
 		auto &sample = op.Cast<LogicalSample>();
 		return SampleIsRepeatable(sample.sample_options.get()) ? LogicalOperatorRepeatability::REPEATABLE

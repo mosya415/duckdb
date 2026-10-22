@@ -1143,6 +1143,13 @@
         "is_deprecated": true
     },
     {
+        "name": "late_materialization_lookup_max_rows",
+        "description": "The maximum amount of rows in the LIMIT/TOP_N/SAMPLE operator for which a scan that can look up rows by their row id is late materialized through a LOOKUP_JOIN. 0 disables the LOOKUP_JOIN: late materialization then joins on the row ids, up to late_materialization_max_rows.",
+        "type": "UBIGINT",
+        "default_scope": "local",
+        "default_value": "2048"
+    },
+    {
         "name": "late_materialization_max_rows",
         "description": "The maximum amount of rows in the LIMIT/SAMPLE operator for which we trigger late materialization.",
         "type": "UBIGINT",
