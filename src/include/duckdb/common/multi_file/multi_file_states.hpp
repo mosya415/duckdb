@@ -269,4 +269,30 @@ public:
 	optional_idx finalize_batch_index;
 };
 
+struct MultiFileLookupWorkspace {
+	MultiFileLookupWorkspace(ClientContext &context, const vector<LogicalType> &output_types) : executor(context) {
+		file_output.Initialize(context, output_types);
+	}
+
+	DataChunk scan_chunk;
+	idx_t scan_chunk_file_index = DConstants::INVALID_INDEX;
+	ExpressionExecutor executor;
+	DataChunk file_output;
+	vector<idx_t> survivors;
+};
+
+struct MultiFileLookupGroup {
+	idx_t file_index;
+	idx_t begin;
+	idx_t end;
+};
+
+struct MultiFileLookupLocalState : public LocalTableFunctionState {
+	unordered_map<idx_t, unique_ptr<LocalTableFunctionState>> scan_states;
+	vector<unique_ptr<MultiFileLookupWorkspace>> workspaces;
+	vector<idx_t> order;
+	vector<int64_t> rows;
+	vector<MultiFileLookupGroup> groups;
+};
+
 } // namespace duckdb
