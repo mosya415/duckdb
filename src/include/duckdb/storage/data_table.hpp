@@ -13,6 +13,7 @@
 #include "duckdb/common/unique_ptr.hpp"
 #include "duckdb/storage/table/data_table_info.hpp"
 #include "duckdb/storage/table/persistent_table_data.hpp"
+#include "duckdb/storage/table/scan_state.hpp"
 #include "duckdb/transaction/local_storage.hpp"
 
 namespace duckdb {
@@ -103,11 +104,16 @@ public:
 	//! count. Skips row groups / vectors holding no requested id; `scratch` is a caller-owned chunk typed
 	//! to `column_ids`. `state` is a caller-owned persistent cursor (kept across batches so the
 	//! scan/decode state stays warm); pass a default-null unique_ptr that the source holds for the
-	//! query's lifetime.
+	//! query's lifetime. The rows are written from output row `w` on.
 	idx_t LookupScan(DuckTransaction &transaction, ClientContext &context, const vector<StorageIndex> &column_ids,
 	                 optional_ptr<TableFilterSet> table_filters, const row_t *pk_begin, const row_t *pk_end,
 	                 idx_t *out_survivor_idx, const idx_t *output_to_fetch, DataChunk &scratch, DataChunk &output,
-	                 unique_ptr<TableScanState> &state);
+	                 unique_ptr<TableScanState> &state, idx_t w = 0);
+	//! LookupScan of the row groups holding the requested ids, in parallel, so the output is in no particular
+	//! order. `state` is kept by the caller across calls.
+	idx_t LookupRows(DuckTransaction &transaction, ClientContext &context, const vector<StorageIndex> &column_ids,
+	                 optional_ptr<TableFilterSet> table_filters, const row_t *pk_begin, const row_t *pk_end,
+	                 idx_t *out_survivor_idx, const idx_t *output_to_fetch, DataChunk &output, TableLookupState &state);
 
 	//! Returns the maximum amount of threads that should be assigned to scan this data table
 	idx_t MaxThreads(ClientContext &context) const;

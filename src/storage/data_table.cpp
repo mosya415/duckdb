@@ -45,6 +45,7 @@
 #include "duckdb/main/database.hpp"
 #include "duckdb/transaction/local_storage.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
+#include "duckdb/parallel/task_scheduler.hpp"
 
 namespace duckdb {
 
@@ -321,9 +322,9 @@ idx_t DataTable::LookupScan(DuckTransaction &transaction, ClientContext &context
                             const vector<StorageIndex> &column_ids, optional_ptr<TableFilterSet> table_filters,
                             const row_t *pk_begin, const row_t *pk_end, idx_t *out_survivor_idx,
                             const idx_t *output_to_fetch, DataChunk &scratch, DataChunk &output,
-                            unique_ptr<TableScanState> &state) {
+                            unique_ptr<TableScanState> &state, idx_t w) {
 	if (pk_begin == pk_end) {
-		return 0;
+		return w;
 	}
 	const idx_t num_pks = static_cast<idx_t>(pk_end - pk_begin);
 	const auto max_row = static_cast<idx_t>(pk_begin[num_pks - 1]);
@@ -347,7 +348,6 @@ idx_t DataTable::LookupScan(DuckTransaction &transaction, ClientContext &context
 	// Survivors are written compactly in pk order; out_survivor_idx[w] records each output row's requested-pk
 	// index (the doc-id-keyed gather reads it back). A requested pk the source no longer holds is dropped.
 	idx_t pk_idx = 0;
-	idx_t w = 0;
 	for (;;) {
 		scratch.Reset();
 		Scan(transaction, scratch, *state);
@@ -385,6 +385,52 @@ idx_t DataTable::LookupScan(DuckTransaction &transaction, ClientContext &context
 			s += run;
 			pk_idx += run;
 		}
+	}
+	return w;
+}
+
+idx_t DataTable::LookupRows(DuckTransaction &transaction, ClientContext &context,
+                            const vector<StorageIndex> &column_ids, optional_ptr<TableFilterSet> table_filters,
+                            const row_t *pk_begin, const row_t *pk_end, idx_t *out_survivor_idx,
+                            const idx_t *output_to_fetch, DataChunk &output, TableLookupState &state) {
+	vector<pair<idx_t, idx_t>> ranges;
+	{
+		auto segments = row_groups->GetRowGroups();
+		auto lock = segments->Lock();
+		for (auto pk = pk_begin; pk != pk_end;) {
+			const auto row_end = segments->GetSegment(lock, static_cast<idx_t>(*pk))->GetRowEnd();
+			const auto end = std::lower_bound(pk, pk_end, static_cast<row_t>(row_end));
+			ranges.emplace_back(static_cast<idx_t>(pk - pk_begin), static_cast<idx_t>(end - pk_begin));
+			pk = end;
+		}
+	}
+	const auto workers = MinValue<idx_t>(ranges.size(), TaskScheduler::QueryThreads(context));
+	if (workers <= 1) {
+		return LookupScan(transaction, context, column_ids, table_filters, pk_begin, pk_end, out_survivor_idx,
+		                  output_to_fetch, state.scratch, output, state.scan);
+	}
+	while (state.workers.size() < workers) {
+		state.workers.push_back(make_uniq<TableLookupState>());
+		state.workers.back()->scratch.Initialize(context, state.scratch.GetTypes());
+	}
+	for (idx_t t = 0; t < workers; t++) {
+		state.workers[t]->ResetFound(context, output.GetTypes(), static_cast<idx_t>(pk_end - pk_begin));
+	}
+	RunLookupTasks(context, workers, ranges.size(), [&](idx_t task, idx_t index) {
+		auto &worker = *state.workers[task];
+		const auto [begin, end] = ranges[index];
+		const auto first = worker.found.size();
+		const auto found =
+		    LookupScan(transaction, context, column_ids, table_filters, pk_begin + begin, pk_begin + end,
+		               worker.found_rows.data(), output_to_fetch, worker.scratch, worker.found, worker.scan, first);
+		for (auto r = first; r < found; r++) {
+			worker.found_rows[r] += begin;
+		}
+		worker.found.SetCardinality(found);
+	});
+	idx_t w = 0;
+	for (idx_t t = 0; t < workers; t++) {
+		w = state.workers[t]->AppendFound(output, output_to_fetch, out_survivor_idx, w);
 	}
 	return w;
 }

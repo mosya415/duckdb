@@ -3,6 +3,9 @@
 # group: [optimizer]
 
 statement ok
+SET late_materialization_lookup_max_rows = 0;
+
+statement ok
 CREATE TABLE lm_rowid AS SELECT i AS id, i % 7 AS grp, 'payload-' || i::VARCHAR AS payload FROM range(1000) t(i);
 
 query II

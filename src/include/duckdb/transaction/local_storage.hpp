@@ -219,7 +219,7 @@ public:
 
 	void MoveStorage(DataTable &old_dt, DataTable &new_dt);
 	void FetchChunk(DataTable &table, const Vector &row_ids, idx_t count, const vector<StorageIndex> &col_ids,
-	                DataChunk &chunk, ColumnFetchState &fetch_state);
+	                DataChunk &chunk, ColumnFetchState &fetch_state, optional_ptr<SelectionVector> fetched = nullptr);
 	//! Returns true, if the local storage contains the row id.
 	bool CanFetch(DataTable &table, const row_t row_id);
 	TableIndexList &GetIndexes(ClientContext &context, DataTable &table);

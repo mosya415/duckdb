@@ -540,7 +540,8 @@ RowGroupIterationHelper RowGroupCollection::Chunks(DuckTransaction &transaction,
 // Fetch
 //===--------------------------------------------------------------------===//
 void RowGroupCollection::Fetch(TransactionData transaction, DataChunk &result, const vector<StorageIndex> &column_ids,
-                               const Vector &row_identifiers, idx_t fetch_count, ColumnFetchState &state) {
+                               const Vector &row_identifiers, idx_t fetch_count, ColumnFetchState &state,
+                               optional_ptr<SelectionVector> fetched) {
 	if (fetch_count == 0) {
 		result.SetChildCardinality(0);
 		return;
@@ -606,6 +607,12 @@ void RowGroupCollection::Fetch(TransactionData transaction, DataChunk &result, c
 
 		if (visible_count == 0) {
 			continue;
+		}
+
+		if (fetched) {
+			for (idx_t k = 0; k < visible_count; k++) {
+				fetched->set_index(count + k, run_start + sel_for_fetch.get().get_index(k));
+			}
 		}
 
 		// 4. bulk per-column fetch

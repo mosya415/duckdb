@@ -786,12 +786,12 @@ void LocalStorage::ChangeType(DataTable &old_dt, DataTable &new_dt, idx_t change
 }
 
 void LocalStorage::FetchChunk(DataTable &table, const Vector &row_ids, idx_t count, const vector<StorageIndex> &col_ids,
-                              DataChunk &chunk, ColumnFetchState &fetch_state) {
+                              DataChunk &chunk, ColumnFetchState &fetch_state, optional_ptr<SelectionVector> fetched) {
 	auto storage = table_manager.GetStorage(table);
 	if (!storage) {
 		throw InternalException("LocalStorage::FetchChunk - local storage not found");
 	}
-	storage->GetCollection().Fetch(transaction, chunk, col_ids, row_ids, count, fetch_state);
+	storage->GetCollection().Fetch(transaction, chunk, col_ids, row_ids, count, fetch_state, fetched);
 }
 
 bool LocalStorage::CanFetch(DataTable &table, const row_t row_id) {

@@ -17,6 +17,7 @@
 #include "duckdb/common/random_engine.hpp"
 #include "duckdb/storage/table/segment_lock.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
+#include "duckdb/parallel/lookup_tasks.hpp"
 #include "duckdb/parser/parsed_data/sample_options.hpp"
 #include "duckdb/common/enums/scan_options.hpp"
 #include "duckdb/storage/storage_index.hpp"
@@ -459,6 +460,13 @@ struct ParallelTableScanState {
 	ParallelCollectionScanState scan_state;
 	//! Parallel scan state for the transaction-local state
 	ParallelCollectionScanState local_state;
+};
+
+//! Caller-owned state of DataTable::LookupRows, kept across calls
+struct TableLookupState : LookupTaskOutput {
+	unique_ptr<TableScanState> scan;
+	DataChunk scratch;
+	vector<unique_ptr<TableLookupState>> workers;
 };
 
 struct PrefetchState {
