@@ -220,6 +220,7 @@ public:
 	//! Set while resuming payload-column decode after the filter-column I/O blocked (vs a fresh row-group pass)
 	bool resuming_payload = false;
 	SelectionVector sel;
+	std::span<const sel_t> lookup_rows;
 
 	ResizeableBuffer define_buf;
 	ResizeableBuffer repeat_buf;

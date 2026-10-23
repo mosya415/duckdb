@@ -2241,6 +2241,15 @@ idx_t ParquetReader::EvaluateFilters(ParquetReaderScanState &state, DataChunk &r
 	D_ASSERT(!filters || state.scan_filters.size() == filters->FilterCount());
 
 	bool is_first_filter = true;
+	if (!state.lookup_rows.empty()) {
+		D_ASSERT(!deletion_filter);
+		state.sel.Initialize(STANDARD_VECTOR_SIZE);
+		for (idx_t i = 0; i < state.lookup_rows.size(); i++) {
+			state.sel.set_index(i, state.lookup_rows[i]);
+		}
+		filter_count = state.lookup_rows.size();
+		is_first_filter = false;
+	}
 	if (deletion_filter) {
 		auto row_start = UnsafeNumericCast<row_t>(state.offset_in_group + state.group_offset);
 		filter_count = deletion_filter->Filter(row_start, scan_count, state.sel);
@@ -2381,7 +2390,7 @@ AsyncResult ParquetReader::Process(ClientContext &context, ParquetReaderScanStat
 	auto define_ptr = (uint8_t *)state.define_buf.ptr;
 	auto repeat_ptr = (uint8_t *)state.repeat_buf.ptr;
 
-	if (filters || deletion_filter) {
+	if (filters || deletion_filter || !state.lookup_rows.empty()) {
 		auto res = ProcessFilters(state, result, scan_count, define_ptr, repeat_ptr, log_prefetch);
 		if (res.GetResultType() == AsyncResultType::BLOCKED) {
 			// we must wait  on the payload I/O

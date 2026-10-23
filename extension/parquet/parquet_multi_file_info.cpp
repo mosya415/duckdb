@@ -31,6 +31,8 @@
 #include "duckdb/function/partition_stats.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/parallel/async_result.hpp"
+#include "duckdb/parallel/lookup_tasks.hpp"
+#include "duckdb/parallel/task_scheduler.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/parsed_expression.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
@@ -241,113 +243,23 @@ static vector<PartitionStatistics> ParquetMultiFileGetPartitionStats(ClientConte
 	}
 	return GetCachedPartitionStats(context, LoadMetadataCaches(context, *bind_data.file_list), encryption_config);
 }
-namespace {
 
-// scan_chunk holds parquet's NATIVE types; we don't cast inside the TF --
-// the caller composes any NATIVE->DECLARED->PROJECTED cast in one pass.
-struct ParquetLookupGlobalState : public GlobalTableFunctionState {
-	shared_ptr<ParquetReader> reader;
-	vector<idx_t> file_cols;
-	vector<idx_t> output_to_file_col;
-	//! row_group_starts[i] = global row index of the first row in group i;
-	//! row_group_starts[num_groups] = total rows.
-	vector<idx_t> row_group_starts;
-	//! Projected columns for the surviving rows of the current chunk. The reader applies the pushed table
-	//! filters; file positions are derived from the reader's scan state, not a file_row_number column.
-	DataChunk scan_chunk;
-	//! Reused selection of the surviving rows within a scanned chunk, so each output column is scattered
-	//! with a single VectorOperations::Copy instead of one copy per row (crucial for nested columns).
-	SelectionVector scatter_sel;
-	ParquetReadGlobalState reader_gstate;
-	ParquetReadLocalState reader_lstate;
-
-	//! Resumable scan cursor persisted ACROSS lookup calls. Consecutive batches whose ids advance within
-	//! the same row group continue the open scan (skip forward) instead of re-scanning the whole group
-	//! from its start on every call -- the native storage lookup (row_group.cpp) keeps the same cursor.
-	//! Without this, a 2048-id batch re-decodes the entire (e.g. 122880-row) group each call.
-	idx_t cur_group = DConstants::INVALID_INDEX; //! row group the reader is currently open on
-	bool group_open = false;                     //! a PrepareScan is live on cur_group (not yet FinishFile'd)
-	bool group_finished = false;                 //! reader reported FINISHED for cur_group
-	idx_t chunk_cursor = 0;                      //! next unread row in scan_chunk
-	idx_t chunk_count = 0;                       //! rows in scan_chunk
-	int64_t last_consumed_frn = -1;              //! file_row of the last row consumed (resume iff target > this)
-
-	//! Derive file positions from the reader's exposed scan state (chunk_row_base + state.sel) instead of a
-	//! file_row_number column -- base + r when dense, base + sel[r] when pushed filters compacted the chunk.
-	bool has_filters = false; //! pushed filters compact the chunk (use state.sel), else dense
-
-	ParquetLookupGlobalState() : reader_gstate(nullptr) {
-	}
-};
-
-unique_ptr<GlobalTableFunctionState> ParquetLookupInitGlobal(ClientContext &context, TableFunctionInitInput &input) {
-	auto &bind_data = input.bind_data->CastNoConst<MultiFileBindData>();
-	auto &file_bind_data = bind_data.bind_data->Cast<TableFunctionMultiFileData>().options.schema_bind_data;
-	if (!file_bind_data) {
-		throw InternalException("parquet lookup requires a bound read_parquet");
-	}
-	auto state = make_uniq<ParquetLookupGlobalState>();
-
-	const auto &file = bind_data.file_list->GetFirstFile();
-	state->reader = make_shared_ptr<ParquetReader>(context, file, ParquetScanFunction::GetFileOptions(*file_bind_data));
-
-	state->file_cols.reserve(input.column_indexes.size());
-	for (auto &col : input.column_indexes) {
-		if (!col.IsVirtualColumn()) {
-			state->file_cols.push_back(col.GetPrimaryIndex());
-		}
-	}
-	for (auto file_col : state->file_cols) {
-		state->reader->column_ids.push_back(MultiFileLocalColumnId(file_col));
-	}
-	state->reader->column_indexes.reserve(state->file_cols.size());
-	for (auto file_col : state->file_cols) {
-		state->reader->column_indexes.emplace_back(file_col);
-	}
-
-	// No file_row_number column: the reader exposes each chunk's base file row (chunk_row_base) and its filter
-	// selection (state.sel), so we derive every surviving row's file position positionally -- base + r when
-	// dense, base + sel[r] when pushed filters compacted the chunk -- exactly like the native storage lookup.
-	// Push the pushed table filters so the reader still prunes row groups, filters rows, and compacts.
-	state->has_filters = (input.filters != nullptr);
-	if (state->has_filters) {
-		state->reader->filters = input.filters->Copy();
-		for (auto &entry : *state->reader->filters) {
-			state->reader->filter_global_indices.emplace_back(entry.GetIndex().GetIndex());
-		}
-	}
-
-	state->output_to_file_col.reserve(input.column_indexes.size());
-	for (auto &col : input.column_indexes) {
-		if (col.IsVirtualColumn()) {
-			state->output_to_file_col.push_back(DConstants::INVALID_INDEX);
-			continue;
-		}
-		const auto file_col = col.GetPrimaryIndex();
-		auto it = std::find(state->file_cols.begin(), state->file_cols.end(), file_col);
-		D_ASSERT(it != state->file_cols.end());
-		state->output_to_file_col.push_back(NumericCast<idx_t>(it - state->file_cols.begin()));
-	}
-
-	const auto *meta = state->reader->GetFileMetadata();
-	state->row_group_starts.reserve(meta->row_groups.size() + 1);
-	state->row_group_starts.push_back(0);
+ParquetLookupCursor::ParquetLookupCursor(ClientContext &context, ParquetReader &reader,
+                                         const vector<LogicalType> &scan_types_p, vector<idx_t> output_to_scan_col_p)
+    : scan_types(scan_types_p), output_to_scan_col(std::move(output_to_scan_col_p)), selection(STANDARD_VECTOR_SIZE) {
+	const auto *meta = reader.GetFileMetadata();
+	row_group_starts.reserve(meta->row_groups.size() + 1);
+	row_group_starts.push_back(0);
 	idx_t cum = 0;
 	for (auto &rg : meta->row_groups) {
 		cum += NumericCast<idx_t>(rg.num_rows);
-		state->row_group_starts.push_back(cum);
+		row_group_starts.push_back(cum);
 	}
-
-	vector<LogicalType> native_types;
-	native_types.reserve(state->file_cols.size());
-	for (idx_t i = 0; i < state->file_cols.size(); ++i) {
-		native_types.push_back(state->reader->columns[state->file_cols[i]].type);
-	}
-	state->scan_chunk.Initialize(context, native_types);
-	state->scatter_sel.Initialize(STANDARD_VECTOR_SIZE);
-
-	return std::move(state);
+	scan_chunk.Initialize(context, scan_types);
+	scatter_sel.Initialize(STANDARD_VECTOR_SIZE);
 }
+
+namespace {
 
 // Synchronously drain an AsyncResult: while BLOCKED, run the I/O tasks at the
 // call site and continue. The lookup TF has no pipeline to suspend onto.
@@ -357,151 +269,93 @@ void DrainAsync(AsyncResult result) {
 	}
 }
 
-// Loads the next chunk of the currently-open row group into gstate.scan_chunk (draining async I/O) and sets
-// chunk_cursor/chunk_count. Returns false once the group is exhausted. The scan state persists in gstate
-// across lookup calls so a group is scanned once, not re-scanned per batch.
-static bool LoadNextChunk(ClientContext &context, ParquetLookupGlobalState &gstate) {
-	auto &reader = *gstate.reader;
-	for (;;) {
-		if (gstate.group_finished) {
-			return false;
+bool LookupReadsMostOfGroup(std::span<const int64_t> pks, idx_t group_start, idx_t group_end) {
+	idx_t needed_vectors = 0;
+	idx_t last_vector = DConstants::INVALID_INDEX;
+	for (idx_t i = 0; i < pks.size() && NumericCast<idx_t>(pks[i]) < group_end; ++i) {
+		const idx_t vector_idx = (NumericCast<idx_t>(pks[i]) - group_start) / STANDARD_VECTOR_SIZE;
+		if (vector_idx != last_vector) {
+			++needed_vectors;
+			last_vector = vector_idx;
 		}
-		gstate.scan_chunk.Reset();
-		auto res = reader.Scan(context, gstate.reader_gstate, gstate.reader_lstate, gstate.scan_chunk);
-		while (res.GetResultType() == AsyncResultType::BLOCKED) {
-			res.ExecuteTasksSynchronously();
-			res = reader.Scan(context, gstate.reader_gstate, gstate.reader_lstate, gstate.scan_chunk);
-		}
-		if (res.GetResultType() == AsyncResultType::FINISHED) {
-			gstate.group_finished = true;
-		}
-		gstate.chunk_count = gstate.scan_chunk.size();
-		gstate.chunk_cursor = 0;
-		if (gstate.chunk_count == 0) {
-			if (gstate.group_finished) {
-				return false;
-			}
-			continue; // BLOCKED with no rows yet -- keep draining
-		}
-		return true;
 	}
+	const idx_t group_vectors = (group_end - group_start + STANDARD_VECTOR_SIZE - 1) / STANDARD_VECTOR_SIZE;
+	return needed_vectors * 2 >= group_vectors;
 }
 
-void ParquetLookupScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
-	auto &gstate = data.global_state->Cast<ParquetLookupGlobalState>();
-	if (data.pk_lookups.empty()) {
-		return;
+struct ParquetLookupRange {
+	idx_t group;
+	idx_t begin;
+	idx_t end;
+};
+
+void LookupRowGroup(ClientContext &context, ParquetReader &reader, ParquetReadGlobalState &reader_gstate,
+                    ParquetLookupCursor &cursor, idx_t group, std::span<const int64_t> pks, idx_t begin, idx_t end,
+                    std::span<idx_t> survivors, DataChunk &output) {
+	const auto group_start = cursor.row_group_starts[group];
+	const auto group_rows = cursor.row_group_starts[group + 1] - group_start;
+	const auto offset_of = [&](idx_t i) {
+		return NumericCast<idx_t>(pks[i]) - group_start;
+	};
+	auto &scan_state = cursor.reader_lstate.scan_state;
+	if (cursor.cur_group != group ||
+	    scan_state.offset_in_group > offset_of(begin) / STANDARD_VECTOR_SIZE * STANDARD_VECTOR_SIZE) {
+		cursor.reader_lstate.group_index = group;
+		reader.PrepareScan(context, reader_gstate, cursor.reader_lstate);
+		if (cursor.cur_group == DConstants::INVALID_INDEX) {
+			cursor.can_prefetch = scan_state.prefetch_mode;
+		}
+		scan_state.prefetch_mode = cursor.can_prefetch && LookupReadsMostOfGroup(pks.subspan(begin, end - begin),
+		                                                                         group_start, group_start + group_rows);
+		DrainAsync(reader.ScheduleIO(context, reader_gstate, cursor.reader_lstate));
+		cursor.cur_group = group;
 	}
-
-	auto &reader = *gstate.reader;
-	gstate.reader_lstate.scan_state.op = nullptr;
-	const auto &pks = data.pk_lookups;
-	const idx_t num_groups = gstate.row_group_starts.size() - 1;
-	idx_t pk_idx = 0;
-	// Dense output cursor: survivors are written compactly from output's current size, so glob's per-file
-	// calls append. The reader already applied the pushed filters + compacted.
-	idx_t w = output.size();
-
-	while (pk_idx < pks.size()) {
-		const idx_t target = NumericCast<idx_t>(pks[pk_idx]);
-		// Locate the row group holding `target` (row_group_starts is sorted ascending).
-		const auto it = std::upper_bound(gstate.row_group_starts.begin(), gstate.row_group_starts.end(), target);
-		const idx_t g = NumericCast<idx_t>(it - gstate.row_group_starts.begin()) - 1;
-		if (g >= num_groups) {
-			break; // id past end of file (deleted / never present)
+	auto w = output.size();
+	auto i = begin;
+	while (i < end) {
+		const auto vector_start = offset_of(i) / STANDARD_VECTOR_SIZE * STANDARD_VECTOR_SIZE;
+		const auto vector_end = MinValue<idx_t>(vector_start + STANDARD_VECTOR_SIZE, group_rows);
+		if (vector_start > scan_state.offset_in_group) {
+			reader.SkipRows(scan_state, vector_start - scan_state.offset_in_group);
 		}
-		const idx_t group_start = gstate.row_group_starts[g];
-		const idx_t group_end = gstate.row_group_starts[g + 1];
-
-		// Resume the open scan iff it is on this group AND positioned at/before `target` (ids advance within
-		// the group across batches -- the common docid~pk-order case). Otherwise (re)open the group fresh.
-		const bool resume =
-		    gstate.group_open && gstate.cur_group == g && static_cast<int64_t>(target) > gstate.last_consumed_frn;
-		if (!resume) {
-			if (gstate.group_open) {
-				reader.FinishFile(context, gstate.reader_gstate);
-			}
-			gstate.reader_lstate.group_index = g;
-			reader.PrepareScan(context, gstate.reader_gstate, gstate.reader_lstate);
-			DrainAsync(reader.ScheduleIO(context, gstate.reader_gstate, gstate.reader_lstate));
-			gstate.cur_group = g;
-			gstate.group_open = true;
-			gstate.group_finished = false;
-			gstate.chunk_cursor = 0;
-			gstate.chunk_count = 0;
-			gstate.last_consumed_frn = static_cast<int64_t>(gstate.row_group_starts[g]) - 1;
-		}
-
-		// Scan forward within group `g`, scattering the ids that fall in it. The reader emits only rows that
-		// passed the pushed filters, whose file position we derive from the scan state; a requested id with no
-		// surviving row is advanced past (dropped). Stop when ids leave the group or the group is exhausted.
-		while (pk_idx < pks.size() && NumericCast<idx_t>(pks[pk_idx]) < group_end) {
-			if (gstate.chunk_cursor >= gstate.chunk_count) {
-				// Dense (no-filter) path: jump straight to the vector holding the next target instead of
-				// decoding every intervening row -- the analogue of DataTable's skip-to-vector. (The filtered
-				// path decodes sequentially: survivors are sparse and their file positions come from state.sel,
-				// so we cannot skip blindly.)
-				if (!gstate.has_filters) {
-					auto &ss = gstate.reader_lstate.scan_state;
-					const idx_t target_off = NumericCast<idx_t>(pks[pk_idx]) - group_start;
-					const idx_t target_vec = (target_off / STANDARD_VECTOR_SIZE) * STANDARD_VECTOR_SIZE;
-					if (target_vec > ss.offset_in_group) {
-						reader.SkipRows(ss, target_vec - ss.offset_in_group);
-					}
-				}
-				if (!LoadNextChunk(context, gstate)) {
-					break; // group exhausted; remaining ids < group_end had no surviving row
-				}
-			}
-			// Derive each row's file position from the reader's scan state -- no file_row_number column. The
-			// reader exposes chunk_row_base (this chunk's first file row) and, when pushed filters compacted the
-			// chunk, state.sel maps each survivor to its pre-filter index within the chunk; dense chunks use r.
-			const auto &scan_state = gstate.reader_lstate.scan_state;
-			const int64_t chunk_row_base = static_cast<int64_t>(scan_state.chunk_row_base);
-			const auto file_row_at = [&](idx_t row) -> int64_t {
-				return chunk_row_base + static_cast<int64_t>(gstate.has_filters ? scan_state.sel.get_index(row) : row);
-			};
-			const idx_t base_w = w;
-			idx_t nsurv = 0;
-			idx_t r = gstate.chunk_cursor;
-			for (; r < gstate.chunk_count; ++r) {
-				const int64_t file_row = file_row_at(r);
-				while (pk_idx < pks.size() && pks[pk_idx] < file_row) {
-					++pk_idx;
-				}
-				if (pk_idx >= pks.size() || NumericCast<idx_t>(pks[pk_idx]) >= group_end) {
-					break; // ids left this group -- resume here on the next group / batch
-				}
-				if (pks[pk_idx] != file_row) {
-					continue; // survivor passed the filters but its id was not requested
-				}
-				gstate.scatter_sel.set_index(nsurv, r);
-				data.pk_survivors[w] = pk_idx;
-				++nsurv;
-				++w;
-				++pk_idx;
-			}
-			if (r > gstate.chunk_cursor) {
-				gstate.last_consumed_frn = file_row_at(r - 1);
-			}
-			gstate.chunk_cursor = r;
-			if (nsurv != 0) {
-				// VARCHAR/nested: Copy deep-copies into output's heap so the data outlives the next Reset.
-				for (idx_t c = 0; c < gstate.output_to_file_col.size(); ++c) {
-					const auto i = gstate.output_to_file_col[c];
-					if (i == DConstants::INVALID_INDEX) {
-						continue;
-					}
-					VectorOperations::Copy(gstate.scan_chunk.data[i], output.data[c], gstate.scatter_sel,
-					                       /*source_count=*/nsurv, /*source_offset=*/0, /*target_offset=*/base_w);
-				}
+		idx_t selected = 0;
+		for (auto j = i; j < end && offset_of(j) < vector_end; j++) {
+			const auto row = UnsafeNumericCast<sel_t>(offset_of(j) - vector_start);
+			if (selected == 0 || cursor.selection[selected - 1] != row) {
+				cursor.selection[selected++] = row;
 			}
 		}
-		// Drop any remaining requested ids that fall in this group but had no surviving row (filtered out,
-		// or the group was exhausted before reaching them). Without this, ids left pointing into a finished
-		// group would re-enter it on the next outer iteration and spin forever (LoadNextChunk keeps failing).
-		while (pk_idx < pks.size() && NumericCast<idx_t>(pks[pk_idx]) < group_end) {
-			++pk_idx;
+		scan_state.lookup_rows = std::span<const sel_t>(cursor.selection.data(), selected);
+		cursor.scan_chunk.Reset();
+		auto result = reader.Scan(context, reader_gstate, cursor.reader_lstate, cursor.scan_chunk);
+		while (result.GetResultType() == AsyncResultType::BLOCKED) {
+			result.ExecuteTasksSynchronously();
+			result = reader.Scan(context, reader_gstate, cursor.reader_lstate, cursor.scan_chunk);
+		}
+		scan_state.lookup_rows = {};
+		const auto first = w;
+		for (idx_t r = 0; r < cursor.scan_chunk.size(); r++) {
+			const auto row = vector_start + scan_state.sel.get_index(r);
+			while (i < end && offset_of(i) < row) {
+				i++;
+			}
+			if (i < end && offset_of(i) == row) {
+				cursor.scatter_sel.set_index(w - first, r);
+				survivors[w++] = i++;
+			}
+		}
+		while (i < end && offset_of(i) < vector_end) {
+			i++;
+		}
+		if (w == first) {
+			continue;
+		}
+		for (idx_t c = 0; c < cursor.output_to_scan_col.size(); c++) {
+			const auto column = cursor.output_to_scan_col[c];
+			if (column != DConstants::INVALID_INDEX) {
+				VectorOperations::Copy(cursor.scan_chunk.data[column], output.data[c], cursor.scatter_sel, w - first, 0,
+				                       first);
+			}
 		}
 	}
 	output.SetCardinality(w);
@@ -509,16 +363,53 @@ void ParquetLookupScan(ClientContext &context, TableFunctionInput &data, DataChu
 
 } // namespace
 
-// Standalone lookup TableFunction for read_parquet. Bypasses MultiFileFunction
-// entirely: gstate is built once per query (file open + projection wired +
-// row-group offsets prebuilt), pk_lookups arrives per call via
-// TableFunctionInput, ParquetReader's public PrepareScan/ScheduleIO/Scan API
-// drives the read directly. Caller (SereneDB) caches gstate across batches.
-TableFunction MakeParquetLookupTableFunction() {
-	TableFunction fn;
-	fn.init_global = ParquetLookupInitGlobal;
-	fn.function = ParquetLookupScan;
-	return fn;
+void ParquetLookupRows(ClientContext &context, ParquetReader &reader, ParquetReadGlobalState &reader_gstate,
+                       ParquetLookupCursor &cursor, std::span<const int64_t> pks, std::span<idx_t> survivors,
+                       DataChunk &output) {
+	const auto &starts = cursor.row_group_starts;
+	vector<ParquetLookupRange> ranges;
+	for (idx_t i = 0; i < pks.size();) {
+		const auto group =
+		    NumericCast<idx_t>(std::upper_bound(starts.begin(), starts.end(), NumericCast<idx_t>(pks[i])) -
+		                       starts.begin()) -
+		    1;
+		if (group + 1 >= starts.size()) {
+			break;
+		}
+		auto end = i;
+		while (end < pks.size() && NumericCast<idx_t>(pks[end]) < starts[group + 1]) {
+			end++;
+		}
+		ranges.push_back({group, i, end});
+		i = end;
+	}
+	cursor.reader_lstate.scan_state.op = nullptr;
+	const auto workers = MinValue<idx_t>(ranges.size(), TaskScheduler::QueryThreads(context));
+	if (workers <= 1) {
+		for (const auto &[group, begin, end] : ranges) {
+			LookupRowGroup(context, reader, reader_gstate, cursor, group, pks, begin, end, survivors, output);
+		}
+		return;
+	}
+	while (cursor.workers.size() < workers) {
+		cursor.workers.push_back(
+		    make_uniq<ParquetLookupCursor>(context, reader, cursor.scan_types, cursor.output_to_scan_col));
+		cursor.workers.back()->reader_lstate.scan_state.op = nullptr;
+	}
+	for (idx_t t = 0; t < workers; t++) {
+		cursor.workers[t]->ResetFound(context, output.GetTypes(), pks.size());
+	}
+	RunLookupTasks(context, workers, ranges.size(), [&](idx_t task, idx_t index) {
+		auto &worker = *cursor.workers[task];
+		const auto &range = ranges[index];
+		LookupRowGroup(context, reader, reader_gstate, worker, range.group, pks, range.begin, range.end,
+		               worker.found_rows, worker.found);
+	});
+	auto w = output.size();
+	for (idx_t t = 0; t < workers; t++) {
+		w = cursor.workers[t]->AppendFound(output, cursor.output_to_scan_col.data(), survivors.data(), w);
+	}
+	output.SetCardinality(w);
 }
 
 void ParquetScanFunction::AddNamedParameters(TableFunction &table_function) {
