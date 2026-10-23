@@ -49,16 +49,8 @@ struct LambdaInvokeData final : public LambdaFunctionData {
 		return make_uniq<LambdaInvokeData>(bound_lambda_expr.SharedLambdaExpr());
 	}
 
-	unique_ptr<Expression> RecoverLambdaChild() const override {
-		throw InternalException("invoke is always serialized with its lambda");
-	}
-
 	optional_ptr<const Expression> GetLambdaExpression() const override {
 		return lambda_expr.get();
-	}
-
-	void SetLambdaExpression(shared_ptr<Expression> expr) override {
-		lambda_expr = std::move(expr);
 	}
 };
 

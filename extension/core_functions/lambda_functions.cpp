@@ -1,4 +1,5 @@
 #include "duckdb/function/lambda_functions.hpp"
+#include "duckdb/common/exception.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
 #include "duckdb/main/client_context.hpp"
 
@@ -233,11 +234,10 @@ unique_ptr<FunctionLocalState> LambdaFunctions::ListLambdaInitLocalState(Express
 	if (!bind_data) {
 		return nullptr;
 	}
-	auto &info = bind_data->Cast<ListLambdaBindData>();
-	if (!info.lambda_expr) {
+	if (expr.GetChildren()[0]->GetReturnType().id() == LogicalTypeId::SQLNULL) {
 		return nullptr;
 	}
-	return make_uniq<LambdaExecuteInfo>(state, info, expr);
+	return make_uniq<LambdaExecuteInfo>(state, bind_data->Cast<ListLambdaBindData>(), expr);
 }
 
 static void SliceBatchInput(Vector &target, Vector &source, const bool consecutive, const idx_t first,
@@ -290,7 +290,6 @@ void ListLambdaBindData::Serialize(Serializer &serializer, const optional_ptr<Fu
                                    const BoundScalarFunction &) {
 	auto &bind_data = bind_data_p->Cast<ListLambdaBindData>();
 	serializer.WriteProperty(100, "return_type", bind_data.return_type);
-	serializer.WritePropertyWithDefault(101, "lambda_expr", bind_data.lambda_expr, shared_ptr<Expression>());
 	serializer.WriteProperty(102, "has_index", bind_data.has_index);
 	serializer.WritePropertyWithDefault<bool>(103, "has_initial", bind_data.has_initial, false);
 	serializer.WritePropertyWithDefault<idx_t>(16488, "index_offset", bind_data.index_offset, 1);
@@ -298,12 +297,16 @@ void ListLambdaBindData::Serialize(Serializer &serializer, const optional_ptr<Fu
 
 unique_ptr<FunctionData> ListLambdaBindData::Deserialize(Deserializer &deserializer, BoundScalarFunction &) {
 	auto return_type = deserializer.ReadProperty<LogicalType>(100, "return_type");
-	auto lambda_expr = deserializer.ReadPropertyWithExplicitDefault<unique_ptr<Expression>>(101, "lambda_expr",
-	                                                                                        unique_ptr<Expression>());
 	auto has_index = deserializer.ReadProperty<bool>(102, "has_index");
 	auto has_initial = deserializer.ReadPropertyWithExplicitDefault<bool>(103, "has_initial", false);
 	auto index_offset = deserializer.ReadPropertyWithExplicitDefault<idx_t>(16488, "index_offset", 1);
-	return make_uniq<ListLambdaBindData>(return_type, std::move(lambda_expr), has_index, has_initial, index_offset);
+	auto &children = deserializer.Get<const const_expression_list_t &>();
+	if (children.size() < 2 || children[1].get().GetExpressionClass() != ExpressionClass::BOUND_LAMBDA) {
+		throw SerializationException("a list lambda function was serialized without its lambda");
+	}
+	auto &bound_lambda_expr = children[1].get().Cast<BoundLambdaExpression>();
+	return make_uniq<ListLambdaBindData>(return_type, bound_lambda_expr.SharedLambdaExpr(), has_index, has_initial,
+	                                     index_offset);
 }
 
 //===--------------------------------------------------------------------===//
@@ -456,7 +459,8 @@ unique_ptr<FunctionData> LambdaFunctions::ListLambdaPrepareBind(vector<unique_pt
 	if (arguments[0]->GetReturnType().id() == LogicalTypeId::SQLNULL) {
 		bound_function.GetArguments()[0] = LogicalType::SQLNULL;
 		bound_function.SetReturnType(LogicalType::SQLNULL);
-		return make_uniq<ListLambdaBindData>(bound_function.GetReturnType(), nullptr);
+		return make_uniq<ListLambdaBindData>(bound_function.GetReturnType(),
+		                                     arguments[1]->Cast<BoundLambdaExpression>().SharedLambdaExpr());
 	}
 	// prepared statements
 	if (arguments[0]->GetReturnType().id() == LogicalTypeId::UNKNOWN) {

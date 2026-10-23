@@ -361,11 +361,10 @@ unique_ptr<FunctionLocalState> ListReduceInitLocalState(ExpressionState &state, 
 	if (!bind_data) {
 		return nullptr;
 	}
-	auto &info = bind_data->Cast<ListLambdaBindData>();
-	if (!info.lambda_expr) {
+	if (expr.GetChildren()[0]->GetReturnType().id() == LogicalTypeId::SQLNULL) {
 		return nullptr;
 	}
-	return make_uniq<ListReduceLocalState>(state, *info.lambda_expr);
+	return make_uniq<ListReduceLocalState>(state, *bind_data->Cast<ListLambdaBindData>().lambda_expr);
 }
 
 } // namespace

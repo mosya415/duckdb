@@ -74,6 +74,11 @@ SELECT {func_name}(1, x -> x + 1);
 ----
 Invalid LIST argument during lambda function binding!
 
+statement error
+CREATE MACRO lambda_parameter(l, f) AS {func_name}(l, f);
+----
+<REGEX>:Binder Error.*Invalid lambda expression!.*
+
 endloop
 
 # list_reduce accepts a third parameter, so shows a different error message
