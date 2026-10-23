@@ -37,6 +37,18 @@ SELECT invoke(lambda x: error('expected'), 1)
 ----
 expected
 
+# Only the first argument is a lambda: a lambda passed as an argument does not bind.
+statement error
+SELECT invoke(lambda x: x, lambda y: y)
+----
+<REGEX>:Binder Error.*No function matches the given name and argument types.*
+
+# A macro parameter cannot stand in for the lambda.
+statement error
+CREATE MACRO invoke_parameter(f) AS invoke(f, 1)
+----
+<REGEX>:Binder Error.*Invalid lambda expression passed to 'invoke' function.*
+
 # CONSISTENT_WITHIN_QUERY lambda bodies must remain inconsistent for persistent expressions.
 statement ok
 CREATE TABLE invoke_consistency_tbl(i INTEGER)

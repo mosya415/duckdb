@@ -1,6 +1,7 @@
 #include "duckdb/function/scalar/generic_functions.hpp"
 #include "duckdb/function/lambda_functions.hpp"
 #include "duckdb/function/scalar_function.hpp"
+#include "duckdb/common/exception.hpp"
 #include "duckdb/common/serializer/serializer.hpp"
 #include "duckdb/common/serializer/deserializer.hpp"
 #include "duckdb/planner/expression/bound_lambda_expression.hpp"
@@ -33,40 +34,31 @@ struct LambdaInvokeData final : public LambdaFunctionData {
 		return LambdaExpressionEquals(lambda_expr, other.lambda_expr);
 	}
 
-	//! Serializes a lambda function's bind data
-	static void Serialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data_p,
-	                      const BoundScalarFunction &function) {
-		auto &bind_data = bind_data_p->Cast<LambdaInvokeData>();
-		serializer.WritePropertyWithDefault(101, "lambda_expr", bind_data.lambda_expr, shared_ptr<Expression>());
+	//! Writes nothing: the lambda is serialized as the first child
+	static void Serialize(Serializer &, const optional_ptr<FunctionData>, const BoundScalarFunction &) {
 	}
 
 	//! Deserializes a lambda function's bind data
 	static unique_ptr<FunctionData> Deserialize(Deserializer &deserializer, BoundScalarFunction &function) {
-		auto lambda_expr = deserializer.ReadPropertyWithExplicitDefault<unique_ptr<Expression>>(
-		    101, "lambda_expr", unique_ptr<Expression>());
-		if (lambda_expr) {
-			auto &bound_lambda_expr = lambda_expr->Cast<BoundLambdaExpression>();
-			PropagateLambdaProperties(function, *bound_lambda_expr.LambdaExpr());
+		auto &children = deserializer.Get<const const_expression_list_t &>();
+		if (children.empty() || children[0].get().GetExpressionClass() != ExpressionClass::BOUND_LAMBDA) {
+			throw SerializationException("invoke was serialized without its lambda");
 		}
-		return make_uniq<LambdaInvokeData>(std::move(lambda_expr));
+		auto &bound_lambda_expr = children[0].get().Cast<BoundLambdaExpression>();
+		PropagateLambdaProperties(function, *bound_lambda_expr.LambdaExpr());
+		return make_uniq<LambdaInvokeData>(bound_lambda_expr.SharedLambdaExpr());
 	}
 
 	unique_ptr<Expression> RecoverLambdaChild() const override {
-		return lambda_expr ? lambda_expr->Copy() : nullptr;
+		throw InternalException("invoke is always serialized with its lambda");
 	}
 
 	optional_ptr<const Expression> GetLambdaExpression() const override {
-		if (!lambda_expr) {
-			return nullptr;
-		}
-		auto &bound_lambda_expr = lambda_expr->Cast<BoundLambdaExpression>();
-		return bound_lambda_expr.LambdaExpr().get();
+		return lambda_expr.get();
 	}
 
 	void SetLambdaExpression(shared_ptr<Expression> expr) override {
-		auto lambda = lambda_expr->Copy();
-		lambda->Cast<BoundLambdaExpression>().SetLambdaExpr(std::move(expr));
-		lambda_expr = shared_ptr<Expression>(std::move(lambda));
+		lambda_expr = std::move(expr);
 	}
 };
 
@@ -82,12 +74,8 @@ struct LambdaInvokeState final : public FunctionLocalState {
 	}
 
 	static unique_ptr<FunctionLocalState> Init(ExpressionState &state, const BoundFunctionExpression &expr,
-	                                           FunctionData *bind_data) {
-		auto &bdata = bind_data->Cast<LambdaInvokeData>();
-		if (!bdata.lambda_expr) {
-			throw InternalException("Invoke function is missing its bound lambda expression");
-		}
-		auto &bound_lambda_expr = bdata.lambda_expr->Cast<BoundLambdaExpression>();
+	                                           FunctionData *) {
+		auto &bound_lambda_expr = expr.GetChildren()[0]->Cast<BoundLambdaExpression>();
 		const auto parameter_count = bound_lambda_expr.ParameterCount();
 		D_ASSERT(parameter_count < expr.GetChildren().size());
 
@@ -137,7 +125,7 @@ unique_ptr<FunctionData> LambdaInvokeBind(BindScalarFunctionInput &input) {
 	bound_function.SetReturnType(bound_lambda_expr.LambdaExpr()->GetReturnType());
 	PropagateLambdaProperties(bound_function, *bound_lambda_expr.LambdaExpr());
 
-	return make_uniq<LambdaInvokeData>(bound_lambda_expr.Copy());
+	return make_uniq<LambdaInvokeData>(bound_lambda_expr.SharedLambdaExpr());
 }
 
 LogicalType LambdaInvokeBindParameters(ClientContext &context, const vector<LogicalType> &function_child_types,
