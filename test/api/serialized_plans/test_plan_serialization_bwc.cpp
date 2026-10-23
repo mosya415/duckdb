@@ -17,9 +17,7 @@
 using namespace duckdb;
 
 string get_full_file_name(const string &file_name) {
-	auto my_name = string("test_plan_serialization_bwc.cpp");
-	auto path = string(__FILE__);
-	return path.replace(path.rfind(my_name), my_name.length(), file_name);
+	return "test/api/serialized_plans/" + file_name;
 }
 
 void load_db(Connection &con) {
