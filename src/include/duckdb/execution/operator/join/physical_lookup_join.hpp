@@ -26,6 +26,7 @@ public:
 	TableFunction lookup;
 	vector<idx_t> row_id_columns;
 	vector<string> key_names;
+	vector<idx_t> output_columns;
 
 public:
 	unique_ptr<GlobalSourceState> GetGlobalSourceState(ClientContext &context) const override;

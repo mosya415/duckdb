@@ -18,7 +18,9 @@ PhysicalLookupJoin::PhysicalLookupJoin(PhysicalPlan &physical_plan, vector<Logic
                                        vector<idx_t> row_id_columns_p, vector<string> key_names_p,
                                        idx_t estimated_cardinality)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::LOOKUP_JOIN, std::move(types), estimated_cardinality),
-      lookup(std::move(lookup_p)), row_id_columns(std::move(row_id_columns_p)), key_names(std::move(key_names_p)) {
+      lookup(std::move(lookup_p)), row_id_columns(std::move(row_id_columns_p)), key_names(std::move(key_names_p)),
+      output_columns(this->types.size()) {
+	std::iota(output_columns.begin(), output_columns.end(), 0);
 	children.push_back(ids);
 	children.push_back(source);
 }
@@ -224,8 +226,15 @@ SourceResultType PhysicalLookupJoin::GetDataInternal(ExecutionContext &context, 
 		if (found == 0) {
 			continue;
 		}
-		chunk.Slice(ids, state.input_sel, found);
-		chunk.Slice(sink.fetched, state.fetched_sel, found, ids.ColumnCount());
+		for (idx_t c = 0; c < output_columns.size(); c++) {
+			const auto column = output_columns[c];
+			if (column < ids.ColumnCount()) {
+				chunk.data[c].Slice(ids.data[column], state.input_sel, found);
+			} else {
+				chunk.data[c].Slice(sink.fetched.data[column - ids.ColumnCount()], state.fetched_sel, found);
+			}
+		}
+		chunk.SetCardinality(found);
 		return state.chunk_index < sink.input.size() ? SourceResultType::HAVE_MORE_OUTPUT : SourceResultType::FINISHED;
 	}
 	return SourceResultType::FINISHED;
