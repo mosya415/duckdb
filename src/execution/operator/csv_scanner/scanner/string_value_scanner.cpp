@@ -1336,7 +1336,7 @@ void StringValueScanner::Flush(DataChunk &insert_chunk) {
 			for (idx_t row = 0; row < parse_chunk.size(); ++row) {
 				bool first_nl = false;
 				auto global_pos =
-				    result.line_positions_per_row[row].begin.GetGlobalPosition(result.result_size, first_nl);
+				    result.line_positions_per_row[row].begin.GetGlobalPosition(result.requested_size, first_nl);
 				data[row] = static_cast<int64_t>(global_pos);
 			}
 		}
