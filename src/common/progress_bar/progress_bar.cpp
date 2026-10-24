@@ -30,21 +30,6 @@ QueryProgress::QueryProgress() {
 	Initialize();
 }
 
-QueryProgress &QueryProgress::operator=(const QueryProgress &other) {
-	if (this != &other) {
-		percentage = other.percentage.load();
-		rows_processed = other.rows_processed.load();
-		total_rows_to_process = other.total_rows_to_process.load();
-	}
-	return *this;
-}
-
-QueryProgress::QueryProgress(const QueryProgress &other) {
-	percentage = other.percentage.load();
-	rows_processed = other.rows_processed.load();
-	total_rows_to_process = other.total_rows_to_process.load();
-}
-
 void ProgressBar::SystemOverrideCheck(ClientConfig &config) {
 	if (config.system_progress_bar_disable_reason != nullptr) {
 		throw InvalidInputException("Could not change the progress bar setting because: '%s'",
@@ -146,7 +131,7 @@ bool ProgressBar::Update(bool final) {
 		if (final) {
 			FinishProgressBarPrint();
 		} else {
-			PrintProgress(query_progress.percentage.load());
+			PrintProgress(query_progress.percentage);
 		}
 	}
 	return true;

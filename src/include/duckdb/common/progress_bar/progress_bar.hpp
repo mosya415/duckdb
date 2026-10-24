@@ -28,13 +28,11 @@ public:
 	double GetPercentage();
 	uint64_t GetRowsProcessed();
 	uint64_t GetTotalRowsToProcess();
-	QueryProgress &operator=(const QueryProgress &other);
-	QueryProgress(const QueryProgress &other);
 
 private:
-	atomic<double> percentage;
-	atomic<uint64_t> rows_processed;
-	atomic<uint64_t> total_rows_to_process;
+	double percentage;
+	uint64_t rows_processed;
+	uint64_t total_rows_to_process;
 };
 
 class ProgressBar {
