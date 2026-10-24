@@ -93,11 +93,7 @@ vector<Identifier> BindContext::GetSimilarBindings(const Identifier &column_name
 }
 
 void BindContext::AddUsingBinding(const Identifier &column_name, UsingColumnSet &set) {
-	auto &info = using_columns[column_name];
-	if (info.bindings.empty()) {
-		info.order = using_column_counter++;
-	}
-	info.bindings.insert(set);
+	using_columns[column_name].insert(set);
 }
 
 optional_ptr<UsingColumnSet> BindContext::GetUsingBinding(const Identifier &column_name) {
@@ -105,7 +101,7 @@ optional_ptr<UsingColumnSet> BindContext::GetUsingBinding(const Identifier &colu
 	if (entry == using_columns.end()) {
 		return nullptr;
 	}
-	auto &using_bindings = entry->second.bindings;
+	auto &using_bindings = entry->second;
 	if (using_bindings.empty()) {
 		throw InternalException("Using binding found but no entries");
 	}
@@ -140,7 +136,7 @@ optional_ptr<UsingColumnSet> BindContext::GetUsingBinding(const Identifier &colu
 	if (entry == using_columns.end()) {
 		return nullptr;
 	}
-	auto &using_bindings = entry->second.bindings;
+	auto &using_bindings = entry->second;
 	for (auto &using_set_ref : using_bindings) {
 		auto &using_set = using_set_ref.get();
 		auto &bindings = using_set.bindings;
@@ -158,7 +154,7 @@ void BindContext::RemoveUsingBinding(const Identifier &column_name, UsingColumnS
 	if (entry == using_columns.end()) {
 		throw InternalException("Attempting to remove using binding that is not there");
 	}
-	auto &bindings = entry->second.bindings;
+	auto &bindings = entry->second;
 	if (bindings.find(set) != bindings.end()) {
 		bindings.erase(set);
 	}
@@ -589,13 +585,8 @@ void BindContext::GenerateAllColumnExpressions(StarExpression &expr,
 		reference_set_t<UsingColumnSet> handled_using_columns;
 		for (auto &group : binding_groups) {
 			// Pass 1: emit this group's USING columns first, in USING clause order (PG convention)
-			vector<pair<idx_t, Identifier>> ordered_using;
-			for (auto &uc : using_columns) {
-				ordered_using.emplace_back(uc.second.order, uc.first);
-			}
-			std::sort(ordered_using.begin(), ordered_using.end(),
-			          [](const auto &a, const auto &b) { return a.first < b.first; });
-			for (auto &[order, column_name] : ordered_using) {
+			for (auto &using_column : using_columns) {
+				auto &column_name = using_column.first;
 				// Find the first binding of this group that has this USING column
 				BindingAlias first_alias;
 				for (auto &entry : group) {
@@ -906,19 +897,9 @@ void BindContext::AddContext(BindContext other) {
 	for (auto &binding : other.bindings_list) {
 		AddBinding(std::move(binding));
 	}
-	vector<reference<const identifier_map_t<UsingColumnInfo>::value_type>> ordered;
 	for (auto &entry : other.using_columns) {
-		ordered.push_back(entry);
-	}
-	std::sort(ordered.begin(), ordered.end(),
-	          [](const auto &a, const auto &b) { return a.get().second.order < b.get().second.order; });
-	for (auto &entry : ordered) {
-		for (auto &alias : entry.get().second.bindings) {
-			auto &info = using_columns[entry.get().first];
-			if (info.bindings.empty()) {
-				info.order = using_column_counter++;
-			}
-			info.bindings.insert(alias);
+		for (auto &alias : entry.second) {
+			using_columns[entry.first].insert(alias);
 		}
 	}
 }
@@ -936,7 +917,7 @@ void BindContext::RemoveContext(const vector<BindingAlias> &aliases) {
 		// remove the binding from any USING columns
 		vector<Identifier> removed_using_columns;
 		for (auto &using_sets : using_columns) {
-			for (auto &using_set_ref : using_sets.second.bindings) {
+			for (auto &using_set_ref : using_sets.second) {
 				auto &using_set = using_set_ref.get();
 				auto it = std::remove_if(using_set.bindings.begin(), using_set.bindings.end(),
 				                         [&](const BindingAlias &using_alias) { return using_alias == alias; });

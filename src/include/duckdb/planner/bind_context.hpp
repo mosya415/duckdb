@@ -12,6 +12,7 @@
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/column_index.hpp"
+#include "duckdb/common/insertion_order_preserving_map.hpp"
 #include "duckdb/common/reference_map.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
@@ -190,13 +191,8 @@ private:
 	//! The FROM item each entry of bindings_list belongs to
 	vector<idx_t> binding_from_item;
 	idx_t from_item_counter = 0;
-	//! The set of columns used in USING join conditions (order = USING clause order)
-	struct UsingColumnInfo {
-		reference_set_t<UsingColumnSet> bindings;
-		idx_t order = 0; //! insertion order for PG-compatible SELECT * output
-	};
-	identifier_map_t<UsingColumnInfo> using_columns;
-	idx_t using_column_counter = 0;
+	//! The set of columns used in USING join conditions, in USING clause order
+	InsertionOrderPreservingMap<reference_set_t<UsingColumnSet>, Identifier> using_columns;
 	//! The set of CTE bindings
 	vector<unique_ptr<CTEBinding>> cte_bindings;
 };
