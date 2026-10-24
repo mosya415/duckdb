@@ -976,7 +976,7 @@ static RewrittenMappedExpression RewriteMappedValueExpression(const Expression &
 
 static unique_ptr<Expression> RewriteDynamicFilterExpression(const shared_ptr<DynamicFilterData> &filter_data,
                                                              const LogicalType &target_type) {
-	if (!filter_data || !filter_data->initialized) {
+	if (!filter_data || filter_data->version.load(std::memory_order_acquire) == 0) {
 		return nullptr;
 	}
 	lock_guard<mutex> lock(filter_data->lock);

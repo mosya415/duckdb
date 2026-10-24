@@ -26,12 +26,12 @@ void DynamicFilterData::SetValue(Value val) {
 	}
 	lock_guard<mutex> l(lock);
 	constant = std::move(val);
-	initialized = true;
+	version.store(version.load(std::memory_order_relaxed) + 1, std::memory_order_release);
 }
 
 void DynamicFilterData::Reset() {
 	lock_guard<mutex> l(lock);
-	initialized = false;
+	version.store(0, std::memory_order_release);
 }
 
 } // namespace duckdb

@@ -196,7 +196,7 @@ public:
 	mutex lock;
 	ExpressionType comparison_type;
 	Value constant;
-	atomic<bool> initialized = {false};
+	atomic<idx_t> version = {0};
 
 	unique_ptr<Expression> ToExpression(const Expression &column) const;
 

@@ -154,7 +154,7 @@ static bool TryExpressionFiltersNullValues(const Expression &expression, bool &f
 			return true;
 		}
 		auto &data = func_expr->BindInfo()->Cast<DynamicFilterFunctionData>();
-		if (!data.filter_data || !data.filter_data->initialized.load()) {
+		if (!data.filter_data || data.filter_data->version.load(std::memory_order_acquire) == 0) {
 			return true;
 		}
 		filters_nulls = true;

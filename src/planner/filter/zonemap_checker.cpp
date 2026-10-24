@@ -512,7 +512,7 @@ public:
 
 	FilterPropagateResult Check(const BaseStatistics &stats, optional_ptr<ClientContext> context) const final {
 		lock_guard<mutex> lock(filter_data->lock);
-		if (!filter_data->initialized) {
+		if (filter_data->version.load(std::memory_order_relaxed) == 0) {
 			return FilterPropagateResult::NO_PRUNING_POSSIBLE;
 		}
 		return DynamicFilterData::CheckStatistics(stats, filter_data->comparison_type, filter_data->constant);
