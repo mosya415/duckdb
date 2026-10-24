@@ -20,6 +20,9 @@ namespace duckdb {
 namespace {
 
 bool IsTargetListFunction(ClientContext &context, const BoundFunctionExpression &expr, const string &target_name) {
+	if (expr.GetChildren().size() < 2 || expr.GetChildren()[1]->GetExpressionClass() != ExpressionClass::BOUND_LAMBDA) {
+		return false;
+	}
 	if (expr.Function().GetName() == target_name) {
 		D_ASSERT(!expr.GetChildren().empty() && expr.GetChildren()[0]->GetReturnType().id() == LogicalTypeId::LIST);
 		return true;
