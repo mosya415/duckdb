@@ -261,11 +261,21 @@ static bool TryFoldNestedValue(ClientContext &context, const Expression &expr, V
 	return false;
 }
 
+static bool TryTakeConstant(const Expression &expr, Value &result) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT || expr.GetReturnType().IsNested()) {
+		return false;
+	}
+	auto &value = expr.Cast<BoundConstantExpression>().GetValue();
+	D_ASSERT(value.type().InternalType() == expr.GetReturnType().InternalType());
+	result = value.WithType(expr.GetReturnType());
+	return true;
+}
+
 Value ExpressionExecutor::EvaluateScalar(ClientContext &context, const Expression &expr, bool allow_unfoldable) {
 	D_ASSERT(allow_unfoldable || expr.IsFoldable());
 	D_ASSERT(expr.IsScalar());
 	Value nested;
-	if (TryFoldNestedValue(context, expr, nested)) {
+	if (TryTakeConstant(expr, nested) || TryFoldNestedValue(context, expr, nested)) {
 		return nested;
 	}
 	// use an ExpressionExecutor to execute the expression
@@ -321,6 +331,9 @@ ExpressionExecutor::FoldResult ExpressionExecutor::EvaluateFoldable(ClientContex
                                                                     Value &result, idx_t max_size) {
 	D_ASSERT(expr.IsFoldable());
 	D_ASSERT(expr.IsScalar());
+	if (TryTakeConstant(expr, result)) {
+		return FoldResult::FOLDED;
+	}
 	if (TryFoldNestedValue(context, expr, result)) {
 		return FoldResult::FOLDED;
 	}
