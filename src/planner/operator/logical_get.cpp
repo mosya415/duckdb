@@ -340,9 +340,7 @@ bool LogicalGet::TryGetStorageIndex(const ColumnIndex &column_index, StorageInde
 	}
 
 	auto table = GetTable();
-	if (!table) {
-		//! If there's no table we assume there's no mismatch between
-		//! logical/storage index
+	if (!table || column_index.GetPrimaryIndex() >= table->GetColumns().LogicalColumnCount()) {
 		out_index = StorageIndex::FromColumnIndex(column_index);
 		return true;
 	}

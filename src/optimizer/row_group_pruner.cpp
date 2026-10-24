@@ -77,12 +77,7 @@ bool RowGroupPruner::TryOptimize(LogicalOperator &op) const {
 		return false;
 	}
 	StorageIndex storage_index;
-	auto table = logical_get->GetTable();
-	if (table && !column_index.IsRowIdColumn() && !column_index.IsVirtualColumn() &&
-	    column_index.GetPrimaryIndex() >= table->GetColumns().LogicalColumnCount()) {
-		// this is ugly code for bm25 to work.
-		storage_index = StorageIndex::FromColumnIndex(column_index);
-	} else if (!logical_get->TryGetStorageIndex(column_index, storage_index)) {
+	if (!logical_get->TryGetStorageIndex(column_index, storage_index)) {
 		return false;
 	}
 
