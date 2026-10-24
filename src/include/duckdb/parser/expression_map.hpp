@@ -32,6 +32,36 @@ struct ExpressionEquality {
 	}
 };
 
+template <class T>
+struct HashedExpression {
+	const_reference<T> expr;
+	hash_t hash;
+};
+
+template <class T>
+struct HashedExpressionHash {
+	using skip_absl_hash_eq_consistent = void;
+	hash_t operator()(const HashedExpression<T> &key) const {
+		return key.hash;
+	}
+};
+
+template <class T>
+struct HashedExpressionEquality {
+	using skip_absl_hash_eq_consistent = void;
+	bool operator()(const HashedExpression<T> &a, const HashedExpression<T> &b) const {
+		return &a.expr.get() == &b.expr.get() || (a.hash == b.hash && a.expr.get().Equals(b.expr.get()));
+	}
+};
+
+template <class T, class V>
+using hashed_expression_map_t =
+    unordered_map<HashedExpression<T>, V, HashedExpressionHash<T>, HashedExpressionEquality<T>>;
+
+template <class T>
+using hashed_expression_set_t =
+    unordered_set<HashedExpression<T>, HashedExpressionHash<T>, HashedExpressionEquality<T>>;
+
 template <typename T>
 using expression_map_t =
     unordered_map<const_reference<Expression>, T, ExpressionHashFunction<Expression>, ExpressionEquality<Expression>>;

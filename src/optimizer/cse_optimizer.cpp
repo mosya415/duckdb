@@ -23,30 +23,13 @@ struct CSEExpressionInfo {
 	bool is_volatile;
 };
 
-struct CSEExpressionKey {
-	const_reference<Expression> expr;
-	hash_t hash;
-};
-
-struct CSEExpressionKeyHash {
-	hash_t operator()(const CSEExpressionKey &key) const {
-		return key.hash;
-	}
-};
-
-struct CSEExpressionKeyEquality {
-	bool operator()(const CSEExpressionKey &a, const CSEExpressionKey &b) const {
-		return &a.expr.get() == &b.expr.get() || (a.hash == b.hash && a.expr.get().Equals(b.expr.get()));
-	}
-};
-
 //! The CSEReplacementState
 struct CSEReplacementState {
 	unordered_map<const Expression *, CSEExpressionInfo> infos;
 	//! The projection index of the new projection
 	TableIndex projection_index;
 	//! Map of expression -> CSENode
-	unordered_map<CSEExpressionKey, CSENode, CSEExpressionKeyHash, CSEExpressionKeyEquality> expression_count;
+	hashed_expression_map_t<Expression, CSENode> expression_count;
 	//! Map of column bindings to column indexes in the projection expression list
 	column_binding_map_t<ProjectionIndex> column_map;
 	//! The set of expressions of the resulting projection
@@ -108,7 +91,7 @@ void CommonSubExpressionOptimizer::CountExpressions(Expression &expr, CSEReplace
 		// we can't move aggregates to a projection, so we only consider the children of the aggregate
 		auto info = GetExpressionInfo(expr, state);
 		if (!info.is_volatile) {
-			CSEExpressionKey key {expr, info.hash};
+			HashedExpression<Expression> key {expr, info.hash};
 			auto node = state.expression_count.find(key);
 			if (node == state.expression_count.end()) {
 				// first time we encounter this expression, insert this node with [count = 1]
@@ -162,8 +145,9 @@ void CommonSubExpressionOptimizer::PerformCSEReplacement(unique_ptr<Expression> 
 	}
 	// check if this child is eligible for CSE elimination
 	auto info = state.infos.find(&expr);
-	auto entry = info == state.infos.end() ? state.expression_count.end()
-	                                       : state.expression_count.find(CSEExpressionKey {expr, info->second.hash});
+	auto entry = info == state.infos.end()
+	                 ? state.expression_count.end()
+	                 : state.expression_count.find(HashedExpression<Expression> {expr, info->second.hash});
 	if (entry != state.expression_count.end()) {
 		auto &node = entry->second;
 		if (node.count > 1) {

@@ -124,3 +124,22 @@ TEST_CASE("Ordering a long join chain greedily evaluates each pair once", "[opti
 	                        StringUtil::Join(predicates, " AND "));
 	REQUIRE(CHECK_COLUMN(result, 0, {10}));
 }
+
+TEST_CASE("Alternating AND and OR levels plan without re-hashing their subtrees", "[optimizer]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	REQUIRE_NO_FAIL(con.Query("CREATE TABLE t AS SELECT i AS a, i % 7 AS b FROM range(1000) r(i)"));
+
+	string predicate = "a > 0";
+	for (idx_t level = 200; level > 0; level--) {
+		auto op = level % 2 ? "AND" : "OR";
+		predicate = StringUtil::Format("(a > %d %s (%s) %s b < %d)", level, op, predicate, op, level % 7);
+	}
+	auto query = "SELECT count(*) FROM t WHERE " + predicate;
+	auto optimized = con.Query(query);
+	REQUIRE_NO_FAIL(*optimized);
+	REQUIRE_NO_FAIL(con.Query("SET disabled_optimizers = 'expression_rewriter'"));
+	auto unoptimized = con.Query(query);
+	REQUIRE_NO_FAIL(*unoptimized);
+	REQUIRE(optimized->Collection().GetValue(0, 0) == unoptimized->Collection().GetValue(0, 0));
+}
