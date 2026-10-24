@@ -244,6 +244,7 @@ public:
 	unique_ptr<PartitionedTupleData> uncombined_data;
 	//! The spill metadata of the aggregate layout, set if the states can spill
 	unique_ptr<AggregateStateSpillPlan> spill_plan;
+	bool keep_generations;
 	//! Synchronizes the transition to exported-only aggregation with concurrent combines
 	SpillPhase spill_phase DUCKDB_GUARDED_BY(lock);
 	//! Uncombined exported data, aligned one-to-one with the partitions of uncombined_data
@@ -280,6 +281,7 @@ RadixHTGlobalSinkState::RadixHTGlobalSinkState(ClientContext &context_p, const R
       scan_pin_properties(TupleDataPinProperties::DESTROY_AFTER_DONE), count_before_combining(0),
       max_partition_size(0) {
 	spill_plan = AggregateStateSpilling::TryCreateSpillPlan(radix_ht.GetLayout());
+	keep_generations = !spill_plan;
 	spill_phase = SpillPhase::NATIVE_ALLOWED;
 	local_data.reserve(number_of_threads);
 	stored_allocators.reserve(number_of_threads);
@@ -522,6 +524,8 @@ public:
 	unique_ptr<PartitionedTupleData> abandoned_data;
 	//! Exported abandoned aggregate states, aligned one-to-one with the partitions of abandoned_data
 	vector<unique_ptr<ColumnDataCollection>> abandoned_exported_data;
+	vector<unique_ptr<PartitionedTupleData>> generations;
+	idx_t generation_count = 0;
 
 	unique_ptr<GroupedAggregateHashTable> admitted;
 	bool admitted_synced = false;
@@ -548,6 +552,8 @@ void RadixHTLocalSinkState::ResetForReuse(const RadixPartitionedHashTable &radix
 	registered = false;
 	abandoned_data.reset();
 	abandoned_exported_data.clear();
+	generations.clear();
+	generation_count = 0;
 	admitted.reset();
 	admitted_synced = false;
 	if (!ht) {
@@ -903,15 +909,27 @@ void GrowReservation(ClientContext &context, RadixHTGlobalSinkState &gstate, con
 	temporary_memory_state.SetRemainingSizeAndUpdateReservation(context, 2 * remaining_size);
 }
 
+static void FoldGenerations(ClientContext &context, RadixHTLocalSinkState &lstate, PartitionedTupleData &target) {
+	for (auto &generation : lstate.generations) {
+		generation->Repartition(context, target);
+	}
+	lstate.generations.clear();
+	lstate.generation_count = 0;
+}
+
 void MaybeRepartition(ClientContext &context, RadixHTGlobalSinkState &gstate, RadixHTLocalSinkState &lstate,
                       const bool combine) {
 	auto &config = gstate.config;
 	auto &ht = *lstate.ht;
 
 	// Check if we're approaching the memory limit
+	idx_t generation_size = 0;
+	for (auto &generation : lstate.generations) {
+		generation_size += generation->SizeInBytes();
+	}
 	const auto aggregate_allocator_size = ht.GetAggregateAllocator()->AllocationSize();
-	const auto total_size =
-	    aggregate_allocator_size + ht.GetPartitionedData().SizeInBytes() + ht.Capacity() * sizeof(ht_entry_t);
+	const auto total_size = aggregate_allocator_size + ht.GetPartitionedData().SizeInBytes() + generation_size +
+	                        ht.Capacity() * sizeof(ht_entry_t);
 	if (total_size > gstate.GetThreadLimit()) {
 		// We're over the thread memory limit
 		if (!gstate.external) {
@@ -937,6 +955,7 @@ void MaybeRepartition(ClientContext &context, RadixHTGlobalSinkState &gstate, Ra
 			}
 			ht.SetRadixBits(external_radix_bits);
 			ht.AcquirePartitionedData()->Repartition(context, *lstate.abandoned_data);
+			FoldGenerations(context, lstate, *lstate.abandoned_data);
 		}
 	}
 
@@ -949,8 +968,8 @@ void MaybeRepartition(ClientContext &context, RadixHTGlobalSinkState &gstate, Ra
 	const auto current_radix_bits = RadixPartitioning::RadixBitsOfPowerOfTwo(partition_count);
 	D_ASSERT(current_radix_bits <= config.GetRadixBits());
 
-	const auto row_size_per_partition =
-	    ht.GetMaterializedCount() * ht.GetPartitionedData().GetLayout().GetRowWidth() / partition_count;
+	const auto row_size_per_partition = (ht.GetMaterializedCount() + lstate.generation_count) *
+	                                    ht.GetPartitionedData().GetLayout().GetRowWidth() / partition_count;
 	if (row_size_per_partition >
 	    LossyNumericCast<idx_t>(config.BLOCK_FILL_FACTOR * static_cast<double>(gstate.block_alloc_size))) {
 		// We crossed our block filling threshold, try to increment radix bits
@@ -964,7 +983,12 @@ void MaybeRepartition(ClientContext &context, RadixHTGlobalSinkState &gstate, Ra
 
 	// We're out-of-sync with the global radix bits, repartition
 	ht.SetRadixBits(global_radix_bits);
-	ht.Repartition();
+	if (gstate.keep_generations && !gstate.external) {
+		lstate.generation_count += ht.GetMaterializedCount();
+		lstate.generations.push_back(ht.AcquirePartitionedData());
+	} else {
+		ht.Repartition();
+	}
 }
 
 void RadixPartitionedHashTable::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input,
@@ -1106,8 +1130,10 @@ void RadixPartitionedHashTable::Combine(ExecutionContext &context, GlobalSinkSta
 		D_ASSERT(lstate.abandoned_data->PartitionCount() == lstate.ht->GetPartitionedData().PartitionCount());
 		D_ASSERT(lstate.abandoned_data->PartitionCount() ==
 		         RadixPartitioning::NumberOfPartitions(gstate.config.GetRadixBits()));
+		FoldGenerations(context.client, lstate, *lstate.abandoned_data);
 		lstate.abandoned_data->Combine(*lstate_data);
 	} else {
+		FoldGenerations(context.client, lstate, *lstate_data);
 		lstate.abandoned_data = std::move(lstate_data);
 	}
 
