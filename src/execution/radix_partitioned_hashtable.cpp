@@ -144,12 +144,12 @@ public:
 	bool SetRadixBitsToExternal();
 	idx_t GetRadixBits() const;
 	idx_t GetMaximumSinkRadixBits() const;
+	idx_t MaximumSinkRadixBits(idx_t width) const;
 
 private:
 	void SetRadixBitsInternal(idx_t radix_bits_p, bool external);
 	idx_t InitialSinkRadixBits() const;
 	idx_t ExternalRadixBits(bool dynamic) const;
-	idx_t MaximumSinkRadixBits() const;
 	idx_t SinkCapacity() const;
 
 private:
@@ -400,13 +400,13 @@ void RadixHTGlobalSinkState::Destroy() {
 
 RadixHTConfig::RadixHTConfig(RadixHTGlobalSinkState &sink_p)
     : sink(sink_p), row_width(sink.radix_ht.GetLayout().GetRowWidth()), sink_capacity(SinkCapacity()),
-      sink_radix_bits(InitialSinkRadixBits()), maximum_sink_radix_bits(MaximumSinkRadixBits()) {
+      sink_radix_bits(InitialSinkRadixBits()), maximum_sink_radix_bits(MaximumSinkRadixBits(row_width)) {
 }
 
 void RadixHTConfig::Reset() {
 	sink_capacity = SinkCapacity();
 	sink_radix_bits = InitialSinkRadixBits();
-	maximum_sink_radix_bits = MaximumSinkRadixBits();
+	maximum_sink_radix_bits = MaximumSinkRadixBits(row_width);
 }
 
 void RadixHTConfig::SetRadixBits(const idx_t &radix_bits_p) {
@@ -473,15 +473,15 @@ idx_t RadixHTConfig::ExternalRadixBits(const bool dynamic) const {
 	return MinValue(bits, MAXIMUM_FINAL_SINK_RADIX_BITS);
 }
 
-idx_t RadixHTConfig::MaximumSinkRadixBits() const {
+idx_t RadixHTConfig::MaximumSinkRadixBits(idx_t width) const {
 	if (sink.number_of_threads <= GROW_STRATEGY_THREAD_THRESHOLD) {
 		return InitialSinkRadixBits(); // Don't repartition unless we go external
 	}
 	// If rows are very wide we have to reduce the number of partitions, otherwise cache misses get out of hand
 	idx_t bits = DConstants::INVALID_INDEX;
-	if (row_width >= ROW_WIDTH_THRESHOLD_TWO) {
+	if (width >= ROW_WIDTH_THRESHOLD_TWO) {
 		bits = MAXIMUM_FINAL_SINK_RADIX_BITS - 2;
-	} else if (row_width >= ROW_WIDTH_THRESHOLD_ONE) {
+	} else if (width >= ROW_WIDTH_THRESHOLD_ONE) {
 		bits = MAXIMUM_FINAL_SINK_RADIX_BITS - 1;
 	} else {
 		bits = MAXIMUM_FINAL_SINK_RADIX_BITS;
@@ -973,7 +973,10 @@ void MaybeRepartition(ClientContext &context, RadixHTGlobalSinkState &gstate, Ra
 	if (row_size_per_partition >
 	    LossyNumericCast<idx_t>(config.BLOCK_FILL_FACTOR * static_cast<double>(gstate.block_alloc_size))) {
 		// We crossed our block filling threshold, try to increment radix bits
-		config.SetRadixBits(current_radix_bits + config.REPARTITION_RADIX_BITS);
+		const auto bytes_per_row = (ht.GetPartitionedData().SizeInBytes() + generation_size) /
+		                           (ht.GetMaterializedCount() + lstate.generation_count);
+		config.SetRadixBits(
+		    MinValue(current_radix_bits + config.REPARTITION_RADIX_BITS, config.MaximumSinkRadixBits(bytes_per_row)));
 	}
 
 	const auto global_radix_bits = config.GetRadixBits();
