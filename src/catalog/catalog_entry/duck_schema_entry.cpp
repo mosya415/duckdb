@@ -178,6 +178,17 @@ optional_ptr<CatalogEntry> DuckSchemaEntry::AddEntryInternal(CatalogTransaction 
 			(void)DropEntryInternal(transaction, *old_entry, entry_name, false, entry->internal);
 		}
 	}
+	auto &dependency_manager = *catalog.GetDependencyManager();
+	LogicalDependencyList resolved;
+	for (auto dependency : entry->dependencies.Set()) {
+		if (!dependency.oid && dependency.catalog == catalog.GetName()) {
+			if (auto subject = dependency_manager.LookupEntry(transaction, dependency)) {
+				dependency.oid = subject->oid;
+			}
+		}
+		resolved.AddDependency(dependency);
+	}
+	entry->dependencies = std::move(resolved);
 	// now try to add the entry
 	if (!set.CreateEntry(transaction, entry_name, std::move(entry), dependencies)) {
 		// entry already exists!
@@ -189,7 +200,6 @@ optional_ptr<CatalogEntry> DuckSchemaEntry::AddEntryInternal(CatalogTransaction 
 			return nullptr;
 		}
 	}
-	auto &dependency_manager = *catalog.GetDependencyManager();
 	for (auto &dependency : dependencies.Set()) {
 		if (!dependency.owned_by) {
 			continue;
