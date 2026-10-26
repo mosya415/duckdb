@@ -127,9 +127,10 @@ TEST_CASE("Kernels that build one huge value stop at the query deadline", "[opti
 	                                 {100, "SELECT len(regexp_extract_all(ab, 'a')) FROM big"},
 	                                 {100, "SELECT len(string_split(csv, ',')) FROM big"}};
 	for (auto &query : queries) {
-		REQUIRE_NO_FAIL(con.Query(StringUtil::Format("SET max_execution_time = %d", query.timeout_ms)));
+		Connection deadline_con(db);
+		REQUIRE_NO_FAIL(deadline_con.Query(StringUtil::Format("SET max_execution_time = %d", query.timeout_ms)));
 		auto start = std::chrono::steady_clock::now();
-		auto result = con.Query(query.sql);
+		auto result = deadline_con.Query(query.sql);
 		auto elapsed = std::chrono::steady_clock::now() - start;
 		REQUIRE(result->HasError());
 		REQUIRE(StringUtil::Contains(result->GetError(), "maximum execution time"));
