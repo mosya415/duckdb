@@ -496,7 +496,9 @@ bool WindowDistinctSortTree::TryNextRun(idx_t &level_idx, idx_t &run_idx) {
 
 		++build_level;
 		if (build_level >= tree.size()) {
-			zipped_tree.tree.clear();
+			for (auto &level : zipped_tree.tree) {
+				level = {};
+			}
 			return false;
 		}
 
