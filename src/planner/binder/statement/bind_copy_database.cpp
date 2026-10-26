@@ -28,6 +28,8 @@ unique_ptr<LogicalOperator> Binder::BindCopyDatabaseSchema(Catalog &from_databas
 	catalog_entries = PhysicalExport::GetNaiveExportOrder(context, from_database);
 
 	auto info = make_uniq<CopyDatabaseInfo>(target_database_name);
+	auto dependency_manager = from_database.GetDependencyManager();
+	auto transaction = from_database.GetCatalogTransaction(context);
 	for (auto &entry : catalog_entries) {
 		if (entry.get().type == CatalogType::JOB_ENTRY) {
 			continue;
@@ -42,7 +44,11 @@ unique_ptr<LogicalOperator> Binder::BindCopyDatabaseSchema(Catalog &from_databas
 		for (auto &dep : create_info->dependencies.Set()) {
 			auto altered_dep = dep;
 			if (dep.catalog == from_database.GetName()) {
+				if (dependency_manager) {
+					altered_dep = dependency_manager->WithCurrentNames(transaction, dep);
+				}
 				altered_dep.catalog = target_database_name;
+				altered_dep.oid = 0;
 			}
 			altered_dependencies.AddDependency(altered_dep);
 		}

@@ -121,66 +121,6 @@ unique_ptr<CatalogEntry> DuckSchemaEntry::Copy(ClientContext &context) const {
 	return make_uniq<DuckSchemaEntry>(catalog, cast_info, nullptr, schema_info, sets);
 }
 
-void DuckSchemaEntry::SetAsRoot(optional_ptr<CatalogTransaction> transaction, optional_ptr<CatalogEntry> previous) {
-	if (previous && previous->type == CatalogType::SCHEMA_ENTRY) {
-		RenameInDependencies(previous->name, transaction);
-	}
-}
-
-void DuckSchemaEntry::RenameInDependencies(const Identifier &previous, optional_ptr<CatalogTransaction> transaction) {
-	auto &schema_name = name;
-	IdentifierEquality equals(catalog.IsCaseSensitive());
-	if (equals(previous, schema_name)) {
-		return;
-	}
-	auto parent_path = transaction ? GetParentSchemaPath(*transaction) : GetParentSchemaPath();
-	const auto depth = parent_path.size();
-	auto under_parent = [&](const vector<Identifier> &path) {
-		if (path.size() < depth) {
-			return false;
-		}
-		for (idx_t i = 0; i < depth; i++) {
-			if (!equals(path[i], parent_path[i])) {
-				return false;
-			}
-		}
-		return true;
-	};
-	vector<reference<DuckSchemaSets>> pending {*sets};
-	while (!pending.empty()) {
-		auto &schema_sets = pending.back().get();
-		pending.pop_back();
-		auto rename_child = [&](CatalogEntry &entry) {
-			if (entry.type == CatalogType::SCHEMA_ENTRY) {
-				pending.push_back(*entry.Cast<DuckSchemaEntry>().sets);
-				return;
-			}
-			auto &dependencies = entry.Cast<StandardEntry>().dependencies;
-			LogicalDependencyList renamed;
-			for (auto &dependency : dependencies.Set()) {
-				auto copy = dependency;
-				auto &info = copy.entry;
-				if (info.type == CatalogType::SCHEMA_ENTRY && info.schema_path.size() == depth &&
-				    under_parent(info.schema_path) && equals(info.name, previous)) {
-					info.name = schema_name;
-				} else if (info.schema_path.size() > depth && under_parent(info.schema_path) &&
-				           equals(info.schema_path[depth], previous)) {
-					info.schema_path[depth] = schema_name;
-				}
-				renamed.AddDependency(copy);
-			}
-			dependencies = std::move(renamed);
-		};
-		schema_sets.ForEachSet([&](CatalogSet &set) {
-			if (transaction) {
-				set.Scan(*transaction, rename_child);
-			} else {
-				set.Scan(rename_child);
-			}
-		});
-	}
-}
-
 optional_ptr<CatalogEntry> DuckSchemaEntry::CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) {
 	LogicalDependencyList dependencies;
 	dependencies.AddDependency(*this);

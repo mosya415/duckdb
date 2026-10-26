@@ -141,6 +141,7 @@ public:
 	static CatalogEntryInfo GetLookupProperties(const CatalogEntry &entry);
 	static CatalogEntryInfo GetLookupProperties(CatalogTransaction transaction, const CatalogEntry &entry);
 	optional_ptr<CatalogEntry> LookupEntry(CatalogTransaction transaction, const LogicalDependency &dependency);
+	LogicalDependency WithCurrentNames(CatalogTransaction transaction, LogicalDependency dependency);
 	//! The drop error for an entry with dependents, for catalogs that track their own dependents.
 	DUCKDB_API static string FormatDropError(const CatalogEntry &object,
 	                                         const vector<reference<CatalogEntry>> &dependents);

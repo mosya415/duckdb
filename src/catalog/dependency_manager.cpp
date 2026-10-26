@@ -595,6 +595,13 @@ optional_ptr<CatalogEntry> DependencyManager::LookupEntry(CatalogTransaction tra
 	return LookupEntry(transaction, dependency.entry);
 }
 
+LogicalDependency DependencyManager::WithCurrentNames(CatalogTransaction transaction, LogicalDependency dependency) {
+	if (auto subject = LookupEntry(transaction, dependency)) {
+		dependency.entry = GetLookupProperties(transaction, *subject);
+	}
+	return dependency;
+}
+
 optional_ptr<CatalogEntry> DependencyManager::LookupEntry(CatalogTransaction transaction, CatalogEntry &dependency) {
 	if (dependency.type != CatalogType::DEPENDENCY_ENTRY) {
 		return &dependency;

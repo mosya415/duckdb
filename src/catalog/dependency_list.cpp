@@ -65,7 +65,8 @@ LogicalDependency::LogicalDependency(optional_ptr<Catalog> catalog_p, CatalogEnt
 }
 
 bool LogicalDependency::Refers(const CatalogEntry &target) const {
-	return entry.type == target.type && entry.name == target.name && entry.schema_path == target.ParentSchemaPath();
+	D_ASSERT(oid && target.oid);
+	return oid == target.oid;
 }
 
 bool LogicalDependency::operator==(const LogicalDependency &other) const {
