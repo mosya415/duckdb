@@ -24,7 +24,8 @@ bool IsTargetListFunction(ClientContext &context, const BoundFunctionExpression 
 		return false;
 	}
 	if (expr.Function().GetName() == target_name) {
-		D_ASSERT(!expr.GetChildren().empty() && expr.GetChildren()[0]->GetReturnType().id() == LogicalTypeId::LIST);
+		D_ASSERT(expr.GetChildren()[0]->GetReturnType().id() == LogicalTypeId::LIST ||
+		         expr.GetChildren()[0]->GetReturnType().id() == LogicalTypeId::SQLNULL);
 		return true;
 	}
 
